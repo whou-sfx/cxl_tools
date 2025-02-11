@@ -44,6 +44,7 @@ void test_cdat(pcie_dev *dev)
 {
     int i;
     uint32_t idx = 0, len;
+    int tbl_size = 0;
     static int tbl_offset = 0;
     struct rsp_header {
         struct cxl_cdat_rsp hdr;
@@ -59,6 +60,7 @@ void test_cdat(pcie_dev *dev)
         if (idx == 0) {
             tbl_offset = 0;
             memset(cdat_tbl, 0x00, sizeof(cdat_tbl));
+            tbl_size = rsp_hdr->data.tbl_hdr.lenggh;
             printf("CDAT table header:\n");
         } else {
             switch (rsp_hdr->data.tbl_entry_hdr.type) {
@@ -94,5 +96,20 @@ void test_cdat(pcie_dev *dev)
         for (; i < len; i++) {
             printf("\tbuf[%02x] = %08x\n", i, buf[i]);
         }
+    }
+
+    if (cdat_checksum(cdat_tbl, tbl_size)) {
+        printf("ERR: cdat tbl checksum uncorrect\n");
+    } else {
+        struct cdat_table_header *tbl_hdr = (struct cdat_table_header *)cdat_tbl;
+        printf("hdr len %d\n", tbl_hdr->length);
+        printf("hdr rev %d\n", tbl_hdr->revision);
+        printf("hdr checksum: 0x%x\n", tbl_hdr->checksum);
+        printf("hdr seq 0x%x\n", tbl->sequence);
+    
+        for ( i = 0; i < tbl_size; i++) {
+                printf("\tcdat_tbl[%02x] = %08x\n", i, cdat_tbl[i]);
+            }
+
     }
 }

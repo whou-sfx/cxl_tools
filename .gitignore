@@ -1,0 +1,7 @@
+*.o
+*.mod
+*.swap
+*.cmd
+*.order
+*.ko
+

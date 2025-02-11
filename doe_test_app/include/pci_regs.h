@@ -13,7 +13,9 @@
 #define PCI_CAP_NEXT(header)    ((header >> 8) & 0xff)
 
 #define PCI_EXT_CAP_ID_DVSEC    0x23    /* Designated Vendor-Specific */
+#ifndef PCI_EXT_CAP_ID_DOE
 #define PCI_EXT_CAP_ID_DOE      0x2e    /* Data Object Exchange */
+#endif
 
 /* DOE Capabilities Register */
 #define PCIE_DOE_CAP            0x04

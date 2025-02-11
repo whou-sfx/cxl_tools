@@ -102,7 +102,7 @@ void test_cdat(pcie_dev *dev)
         i = sizeof(struct cxl_cdat_rsp) / 4;
         idx = rsp_hdr->hdr.entry_handle;
         len = rsp_hdr->hdr.doe_hdr.length;
-        for (i = 0; i < len; i++) {
+        for (; i < len; i++) {
             printf("\tbuf[%02x] = %08x\n", i, buf[i]);
         }
 

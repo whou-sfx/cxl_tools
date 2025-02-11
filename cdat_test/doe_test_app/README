@@ -1,0 +1,10 @@
+A simple application for PCIe DOE testing.
+
+Quick start:
+    $ git submodule update --init --recursive
+    $ cd driver/
+    $ make
+    $ sudo insmod doe.ko
+    $ cd ../
+    $ make
+    $ sudo bin/pcie_test.exe -s <BDF>

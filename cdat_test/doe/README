@@ -1,0 +1,12 @@
+This repo is a simple PCIe Data Object Exchange (DOE) driver created by Avery
+Design System.
+
+Jonathan Cameron from huawei has created a patch for PCIe Data Object Exchange
+(DOE) for linux kernel [1]. This simple DOE driver is created based on his
+work. The source code related to that patch was put under libdoe.
+
+[1] https://lore.kernel.org/linux-pci/20210310180306.1588376-2-Jonathan.Cameron@huawei.com/
+
+Quick start:
+    $ make
+    $ sudo insmod doe.ko

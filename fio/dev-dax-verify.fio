@@ -1,0 +1,71 @@
+#sudo fio ./dev-dax-verify.fio --debug=verify --output=cxl_xx.log
+[global]
+bs=2M
+ioengine=dev-dax
+#norandommap
+time_based
+runtime=2h
+group_reporting
+disable_lat=1
+disable_slat=1
+disable_clat=1
+clat_percentiles=0
+cpus_allowed_policy=split
+
+# For the dev-dax engine:
+#
+#   IOs always complete immediately
+#   IOs are always direct
+#
+iodepth=128
+direct=0
+thread
+numjobs=1
+#
+# The dev-dax engine does IO to DAX device that are special character
+# devices exported by the kernel (e.g. /dev/dax0.0). The device is
+# opened normally and then the region is accessible via mmap. We do
+# not use the O_DIRECT flag because the device is naturally direct
+# access. The O_DIRECT flags will result in failure. The engine
+# access the underlying NVDIMM directly once the mmapping is setup.
+#
+# Check the alignment requirement of your DAX device. Currently the default
+# should be 2M. Blocksize (bs) should meet alignment requirement.
+#
+# An example of creating a dev dax device node from pmem:
+# ndctl create-namespace --reconfig=namespace0.0 --mode=dax --force
+#
+filename=/dev/dax0.0
+
+#verify
+#This option can be used for repeated burn-in tests of a system to make sure that the written data is also correctly
+#read back. If the data direction given is a read or random read, fio will assume that it should verify a previously
+#written file. If the data direction includes any form of write, the verify will be of the newly written data.
+
+#To avoid false verification errors, do not use the norandommap option when verifying data with async I/O
+#engines and I/O depths > 1. Or use the norandommap and the lfsr random generator together to avoid writing to
+#the same offset with muliple outstanding I/Os.
+
+
+[dev-dax-seq-write-verify]
+rw=write
+verify=md5
+stonewall
+
+[dev-dax-seq-read-verify]
+rw=read
+verify=md5
+do_verify=1
+stonewall
+
+#[dev-dax-random-write-verify]
+#rw=randwrite
+#verify=md5
+#stonewall
+
+#[dev-dax-random-read-verify]
+#rw=randread
+#verify=md5
+#do_verify=1
+#stonewall
+

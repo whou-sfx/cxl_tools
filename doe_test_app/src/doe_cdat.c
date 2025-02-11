@@ -15,7 +15,7 @@
 #include "cxl_cdat.h"
 
 uint32_t buf[PCI_DOE_MAX_DW_SIZE + 1] = {0};
-uint8_t  cdat_tbl[PCI_DOE_MAX_DW_SIZE + 1] = {0};
+uint32_t  cdat_tbl[PCI_DOE_MAX_DW_SIZE + 1] = {0};
 
 
 void do_cdat_req(pcie_dev *dev, uint32_t idx)
@@ -95,31 +95,36 @@ void test_cdat(pcie_dev *dev)
             }
         }
         payload = (rsp_hdr->hdr.doe_hdr.length * sizeof(uint32_t)) - sizeof(struct cxl_cdat);
-        memcpy((cdat_tbl+tbl_offset), (void *) &(rsp_hdr->data.tbl_hdr), payload);
+	printf("doe_hdr_len %ld, cxl_cdat_hdr %ld, payloalen %d\n", (rsp_hdr->hdr.doe_hdr.length * sizeof(uint32_t)), sizeof(struct cxl_cdat), payload);
+        memcpy(((uint8_t *)(cdat_tbl)+tbl_offset), (void *) &(rsp_hdr->data.tbl_hdr), payload);
         tbl_offset += payload;
 
         i = sizeof(struct cxl_cdat_rsp) / 4;
         idx = rsp_hdr->hdr.entry_handle;
         len = rsp_hdr->hdr.doe_hdr.length;
-        for (; i < len; i++) {
+        for (i = 0; i < len; i++) {
             printf("\tbuf[%02x] = %08x\n", i, buf[i]);
         }
 
         printf("next ent: %02x\n", idx);
     }
 
-    if (cdat_checksum(cdat_tbl, tbl_size)) {
-        printf("ERR: cdat tbl checksum uncorrect\n");
-    } else {
+    /*dump the cdat table*/ 
+    {
         struct cdat_table_header *tbl_hdr = (struct cdat_table_header *)cdat_tbl;
         printf("hdr len %d\n", tbl_hdr->length);
         printf("hdr rev %d\n", tbl_hdr->revision);
         printf("hdr checksum: 0x%x\n", tbl_hdr->checksum);
         printf("hdr seq 0x%x\n", tbl_hdr->sequence);
     
-        for ( i = 0; i < tbl_size; i++) {
+        for ( i = 0; i < tbl_size/sizeof(uint32_t); i++) {
                 printf("\tcdat_tbl[%02x] = %08x\n", i, cdat_tbl[i]);
             }
 
     }
+    if (cdat_checksum(cdat_tbl, tbl_size)) {
+        printf("ERR: cdat tbl checksum uncorrect\n");
+    } else {
+	    printf("cdat tbl checksum pass\n");
+    } 
 }

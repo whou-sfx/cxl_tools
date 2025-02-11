@@ -1,6 +1,7 @@
 *.o
 *.mod
 *.swap
+*.swp
 *.cmd
 *.order
 *.ko

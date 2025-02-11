@@ -15,7 +15,7 @@
 #include "cxl_cdat.h"
 
 uint32_t buf[PCI_DOE_MAX_DW_SIZE + 1] = {0};
-uint32_t cdat_tbl[PCI_DOE_MAX_DW_SIZE + 1] = {0};
+uint8_t  cdat_tbl[PCI_DOE_MAX_DW_SIZE + 1] = {0};
 
 
 void do_cdat_req(pcie_dev *dev, uint32_t idx)
@@ -40,6 +40,16 @@ void do_cdat_req(pcie_dev *dev, uint32_t idx)
     doe_exchange_object(dev, doe_cap, buf);
 }
 
+static unsigned char cdat_checksum(void *buf, size_t size)
+{
+    unsigned char sum, *data = buf;
+    size_t i;
+
+    for (sum = 0, i = 0; i < size; i++)
+       sum += data[i];
+    return sum;
+}
+
 void test_cdat(pcie_dev *dev)
 {
     int i;
@@ -60,8 +70,8 @@ void test_cdat(pcie_dev *dev)
         if (idx == 0) {
             tbl_offset = 0;
             memset(cdat_tbl, 0x00, sizeof(cdat_tbl));
-            tbl_size = rsp_hdr->data.tbl_hdr.lenggh;
-            printf("CDAT table header:\n");
+            tbl_size = rsp_hdr->data.tbl_hdr.length;
+            printf("CDAT table header(len %d):\n", tbl_size);
         } else {
             switch (rsp_hdr->data.tbl_entry_hdr.type) {
             case CDAT_TYPE_DSMAS:
@@ -91,11 +101,11 @@ void test_cdat(pcie_dev *dev)
         i = sizeof(struct cxl_cdat_rsp) / 4;
         idx = rsp_hdr->hdr.entry_handle;
         len = rsp_hdr->hdr.doe_hdr.length;
-
-        printf("next ent: %02x\n", idx);
         for (; i < len; i++) {
             printf("\tbuf[%02x] = %08x\n", i, buf[i]);
         }
+
+        printf("next ent: %02x\n", idx);
     }
 
     if (cdat_checksum(cdat_tbl, tbl_size)) {
@@ -105,7 +115,7 @@ void test_cdat(pcie_dev *dev)
         printf("hdr len %d\n", tbl_hdr->length);
         printf("hdr rev %d\n", tbl_hdr->revision);
         printf("hdr checksum: 0x%x\n", tbl_hdr->checksum);
-        printf("hdr seq 0x%x\n", tbl->sequence);
+        printf("hdr seq 0x%x\n", tbl_hdr->sequence);
     
         for ( i = 0; i < tbl_size; i++) {
                 printf("\tcdat_tbl[%02x] = %08x\n", i, cdat_tbl[i]);

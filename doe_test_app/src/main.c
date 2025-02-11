@@ -143,7 +143,7 @@ int main(int argc, char **argv)
     init_cap_offset(&dev);
 
     /* check cap */
-    if (!dev.doe_cap_head->cap) {
+    if (!dev.doe_cap_head) {
         printf("DOE not found\n");
         return -1;
     }

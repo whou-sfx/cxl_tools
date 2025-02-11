@@ -22,6 +22,7 @@ int init_cap_offset(pcie_dev *dev)
     for (cap_offset = config_read(dev->pdev, PCI_CAPABILITY_LIST);
          cap_offset; cap_offset = PCI_CAP_NEXT(reg_val)) {
         reg_val = config_read(dev->pdev, cap_offset);
+	printf("reg_val 0x%x\n", reg_val);
 
         switch (PCI_CAP_ID(reg_val)) {
         case PCI_CAP_ID_EXP:
@@ -35,6 +36,7 @@ int init_cap_offset(pcie_dev *dev)
     for (cap_offset = PCIE_EXT_CAP_OFFSET; cap_offset;
          cap_offset = PCI_EXT_CAP_NEXT(reg_val)) {
         reg_val = config_read(dev->pdev, cap_offset);
+	printf("reg_val[0x%0x] 0x%x\n", cap_offset, reg_val);
 
         switch (PCI_EXT_CAP_ID(reg_val)) {
         case PCI_EXT_CAP_ID_DVSEC:
@@ -61,6 +63,7 @@ int init_cap_offset(pcie_dev *dev)
         }
     }
 
+    printf("End scan cap\n");
     return 0;
 }
 

@@ -15,14 +15,14 @@
 #include "cxl_cdat.h"
 
 uint32_t buf[PCI_DOE_MAX_DW_SIZE + 1] = {0};
-uint32_t resp_buf[PCI_DOE_MAX_DW_SIZE + 1] = {0};
+uint32_t cdat_tbl[PCI_DOE_MAX_DW_SIZE + 1] = {0};
 
 
 void do_cdat_req(pcie_dev *dev, uint32_t idx)
 {
     int doe_cap;
     struct cxl_cdat req = {
-        .header = {
+        .doe_hdr = {
             .vendor_id = CXL_VENDOR_ID,
             .doe_type = CXL_DOE_TABLE_ACCESS,
             .length = DIV_ROUND_UP(sizeof(req), sizeof(uint32_t)),
@@ -36,7 +36,7 @@ void do_cdat_req(pcie_dev *dev, uint32_t idx)
             //DATA_OBJ_BUILD_HEADER1(CXL_VENDOR_ID, CXL_DOE_TABLE_ACCESS));
 
     doe_cap = 0xd00;
-    memcpy(buf + 1, &req, req.header.length * sizeof(uint32_t));
+    memcpy(buf + 1, &req, req.doe_hdr.length * sizeof(uint32_t));
     doe_exchange_object(dev, doe_cap, buf);
 }
 
@@ -44,20 +44,24 @@ void test_cdat(pcie_dev *dev)
 {
     int i;
     uint32_t idx = 0, len;
+    static int tbl_offset = 0;
     struct rsp_header {
         struct cxl_cdat_rsp hdr;
-        struct cdat_sub_header sub_hdr;
+        union cdat_data     data;
     };
     struct rsp_header *rsp_hdr;
 
     rsp_hdr = (struct rsp_header *)buf;
 
     while (idx != CXL_DOE_TAB_ENT_MAX) {
+        int payload = 0;
         do_cdat_req(dev, idx);
         if (idx == 0) {
+            tbl_offset = 0;
+            memset(cdat_tbl, 0x00, sizeof(cdat_tbl));
             printf("CDAT table header:\n");
         } else {
-            switch (rsp_hdr->sub_hdr.type) {
+            switch (rsp_hdr->data.tbl_entry_hdr.type) {
             case CDAT_TYPE_DSMAS:
                 printf("DSMAS:\n");
                 break;
@@ -78,9 +82,13 @@ void test_cdat(pcie_dev *dev)
                 break;
             }
         }
+        payload = (rsp_hdr->hdr.doe_hdr.length * sizeof(uint32_t)) - sizeof(struct cxl_cdat);
+        memcpy((cdat_tbl+tbl_offset), (void *) &(rsp_hdr->data.tbl_hdr), payload);
+        tbl_offset += payload;
+
         i = sizeof(struct cxl_cdat_rsp) / 4;
         idx = rsp_hdr->hdr.entry_handle;
-        len = rsp_hdr->hdr.header.length;
+        len = rsp_hdr->hdr.doe_hdr.length;
 
         printf("next ent: %02x\n", idx);
         for (; i < len; i++) {

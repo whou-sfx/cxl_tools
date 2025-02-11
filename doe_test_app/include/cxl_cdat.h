@@ -30,12 +30,15 @@ enum {
 
 /* Read Entry Request, 8.1.11.1 Table 134 */
 struct cxl_cdat {
-    DOEHeader header;
+    DOEHeader doe_hdr;
     uint8_t req_code;
     uint8_t table_type;
     uint16_t entry_handle;
 } __attribute__((__packed__));
 
+
+/* Read Entry Response, 8.1.11.1 Table 135 */
+#define cxl_cdat_rsp    cxl_cdat
 /*
  * CDAT Table Structure (CDAT Spec)
  */
@@ -51,7 +54,6 @@ struct cdat_table_header {
 } __attribute__((__packed__));
 
 
-/* Read Entry Response, 8.1.11.1 Table 135 */
 
 
 /* Values for subtable type in CDAT structures */
@@ -76,8 +78,8 @@ struct cdat_sub_header {
  * CDAT header or a structure).
  */
 union cdat_data {
-	struct cdat_table_header header;
-	struct cdat_sub_header entry;
+	struct cdat_table_header tbl_hdr;
+	struct cdat_sub_header   tbl_entry_hdr;
 }__attribute__((__packed__));
 
 /* CDAT Structure Subtables */
@@ -126,6 +128,7 @@ struct cdat_dsemts {
 } __attribute__((__packed__));
 
 struct cdat_sslbe {
+    struct cdat_sub_header header;
     uint16_t port_x_id;
     uint16_t port_y_id;
     uint16_t latency_bandwidth;

@@ -128,7 +128,7 @@ static int doe_create_cdev(struct doe_dev *doe_dev)
 	if (rc)
 		goto err_cdev;
 
-	doe_class = class_create(THIS_MODULE, "doe");
+	doe_class = class_create("doe");
 	device_create(doe_class, NULL, devno, NULL, "doe%d", /*minor*/0);
 
 	return 0;

@@ -41,21 +41,26 @@ static struct class *doe_class = NULL;
 /* Discovery in kernel space */
 static void do_doe_discovery(struct doe_dev *ddev, uint32_t idx) {
 	int ret = -2;
-	doe_discovery request = {
-		.header = {
-			.vendor_id = PCI_DOE_PCI_SIG_VID,
-			.doe_type = PCI_SIG_DOE_DISCOVERY,
-			.length = DIV_ROUND_UP(sizeof(request), sizeof(uint32_t)),
-		},
-		.index = idx,
-	};
-	doe_discovery_rsp response;
+    doe_discovery_rsp response = { 0 };
+    do {
+        if (response.next_index != 0) {
+            idx = response.next_index;
+        }
+        doe_discovery request = {
+            .header = {
+                .vendor_id = PCI_DOE_PCI_SIG_VID,
+                .doe_type = PCI_SIG_DOE_DISCOVERY,
+                .length = DIV_ROUND_UP(sizeof(request), sizeof(uint32_t)),
+            },
+            .index = idx,
+        };
 
-	ret = pcie_doe_exchange(&ddev->doe_head->doe, (u32 *)&request, sizeof(request),
-		(u32 *)&response, sizeof(response));
-	dev_info(&ddev->pdev->dev, "ret = %x, len %x, vid %x, type %x, next idx %x\n",
-		ret, response.header.length, response.vendor_id, response.doe_type,
-		response.next_index);
+        ret = pcie_doe_exchange(&ddev->doe_head->doe, (u32 *)&request, sizeof(request),
+            (u32 *)&response, sizeof(response));
+        dev_info(&ddev->pdev->dev, "ret = %x, len %x, vid %x, type %x, next idx %x\n",
+            ret, response.header.length, response.vendor_id, response.doe_type,
+            response.next_index);
+    } while (respone.next_index != 0);
 }
 
 static long doe_ioctl(struct file *file, unsigned int cmd, unsigned long arg)

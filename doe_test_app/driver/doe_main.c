@@ -39,13 +39,12 @@ static int doe_major;
 static struct class *doe_class = NULL;
 
 /* Discovery in kernel space */
-static void do_doe_discovery(struct doe_dev *ddev, uint32_t idx) {
+static void do_doe_discovery(struct doe_dev *ddev) {
 	int ret = -2;
+    int idx = 0;
     doe_discovery_rsp response = { 0 };
     do {
-        if (response.next_index != 0) {
-            idx = response.next_index;
-        }
+        idx = response.next_index;
         doe_discovery request = {
             .header = {
                 .vendor_id = PCI_DOE_PCI_SIG_VID,
@@ -60,7 +59,7 @@ static void do_doe_discovery(struct doe_dev *ddev, uint32_t idx) {
         dev_info(&ddev->pdev->dev, "ret = %x, len %x, vid %x, type %x, next idx %x\n",
             ret, response.header.length, response.vendor_id, response.doe_type,
             response.next_index);
-    } while (respone.next_index != 0);
+    } while (response.next_index != 0);
 }
 
 static long doe_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -190,7 +189,7 @@ static int doe_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	dev_set_drvdata(&pdev->dev, ddev);
 	doe_create_cdev(ddev);
 
-	do_doe_discovery(ddev, 1);
+	do_doe_discovery(ddev);
 
 	return 0;
 }

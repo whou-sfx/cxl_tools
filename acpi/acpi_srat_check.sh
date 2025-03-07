@@ -19,6 +19,10 @@ iasl -d srat.dat
 ls srat.dsl
 #srat.dsl
 
+## dump cedt table for VH structure
+iasl -d cedt.dat
+ls cedt.dsl
+
 
 # Then Using the "Base Address" that FW get from Device to get the Entry
 #

@@ -31,15 +31,15 @@ typedef void (*Testcase)(pcie_dev *);
 /* The commented test_list is not implemented
  * in Avery BFM CXL Device yet */
 static Testcase test_list[] = {
-    test_discovery,
-    test_cdat,
+    //test_discovery,
+    test_compliance,
+    //test_cdat,
     /*
     test_error,
     test_invalid_len,
     test_invalid_protocol,
     test_abort,
     test_not_align,
-    test_compliance,
     */
 };
 

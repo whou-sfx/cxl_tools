@@ -51,6 +51,7 @@ enum comp_type {
     CXL_COMP_MODE_INJ_ALMP,
     CXL_COMP_MODE_IGN_ALMP,
     CXL_COMP_MODE_INJ_BIT_ERR,
+    CXL_COMP_MODE_INJ_MEDIA_POSION,
 };
 
 typedef struct compliance_req_header CompReqHeader;
@@ -263,6 +264,21 @@ struct cxl_compliance_mode_inject_bit_error {
     uint8_t opcode;
 } __attribute__((__packed__));
 
+/*14.16.3.17 Inject meida posion*/
+struct cxl_compliance_mode_inject_media_posion {
+    CompReqHeader header;
+
+    uint8_t protol;
+    uint8_t rsvd2;
+    uint8_t action; /*0 inject, 1 clear*/
+    uint8_t rsvd3;
+
+    uint64_t dpa;
+    uint64_t data;
+
+} __attribute__((__packed__));
+
+
 /* 14.16.4.16 Table 308 */
 #define cxl_compliance_mode_inject_bit_error_rsp len_rsvd_rsp
 
@@ -291,6 +307,7 @@ typedef union doe_u {
     struct cxl_compliance_mode_inject_almp inject_almp;
     struct cxl_compliance_mode_ignore_almp ignore_almp;
     struct cxl_compliance_mode_inject_bit_error ignore_bit_error;
+    struct cxl_compliance_mode_inject_media_posion inject_media_posion;
 } CompReq;
 
 typedef union doe_rsp_u {

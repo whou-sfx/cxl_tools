@@ -42,10 +42,19 @@ static void do_compliance_req(pcie_dev *dev, uint32_t idx)
     case CXL_COMP_MODE_INJ_MAC:
     case CXL_COMP_MODE_INS_UNEXP_MAC:
     case CXL_COMP_MODE_INJ_VIRAL:
+        req_len = sizeof(struct cxl_compliance_mode_inject_viral);
         req.inject_viral.protocol = 2;
+        break;
     case CXL_COMP_MODE_INJ_ALMP:
     case CXL_COMP_MODE_IGN_ALMP:
     case CXL_COMP_MODE_INJ_BIT_ERR:
+    case CXL_COMP_MODE_INJ_MEDIA_POSION:
+        req_len = sizeof(struct cxl_compliance_mode_inject_media_posion);
+        req.inject_media_posion.protol = 0x2;  /*0x2 for cxl.mem*/
+        req.inject_media_posion.action = 0;  /* 0 for inject; 1 for clear*/
+        req.inject_media_posion.dpa = 0x20000;
+        req.inject_media_posion.data = 0x0;
+        break;
     default:
         break;
     }
@@ -78,6 +87,7 @@ void test_compliance(pcie_dev *dev)
     memset(comp_buf, 0x00, sizeof(comp_buf));
     rsp_hdr = (CompRspHeader *)comp_buf;
 
+    printf("Compaliance Query Cap\n");
     do_compliance_req(dev, CXL_COMP_MODE_CAP);
 
     printf("VID = %x\n", rsp_hdr->doe_header.vendor_id);
@@ -94,6 +104,7 @@ void test_compliance(pcie_dev *dev)
     }
 
 
+    printf("Compliance Inject Viral\n");
     do_compliance_req(dev, CXL_COMP_MODE_INJ_VIRAL);
 
     printf("VID = %x\n", rsp_hdr->doe_header.vendor_id);
@@ -109,8 +120,8 @@ void test_compliance(pcie_dev *dev)
         printf("\tcomp_buf[%02x] = %08x\n", i, comp_buf[i]);
     }
 
-    return;
-    do_compliance_req(dev, CXL_COMP_MODE_BOGUS);
+    printf("Compliance Inject Media Error\n");
+    do_compliance_req(dev, CXL_COMP_MODE_INJ_MEDIA_POSION);
 
     printf("VID = %x\n", rsp_hdr->doe_header.vendor_id);
     printf("DOE Type = %x\n", rsp_hdr->doe_header.doe_type);
@@ -124,4 +135,5 @@ void test_compliance(pcie_dev *dev)
     for (; i < rsp_hdr->doe_header.length; i++) {
         printf("\tcomp_buf[%02x] = %08x\n", i, comp_buf[i]);
     }
+
 }

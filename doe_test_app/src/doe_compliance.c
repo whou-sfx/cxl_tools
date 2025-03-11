@@ -42,6 +42,7 @@ static void do_compliance_req(pcie_dev *dev, uint32_t idx)
     case CXL_COMP_MODE_INJ_MAC:
     case CXL_COMP_MODE_INS_UNEXP_MAC:
     case CXL_COMP_MODE_INJ_VIRAL:
+        req.inject_viral.protocol = 2;
     case CXL_COMP_MODE_INJ_ALMP:
     case CXL_COMP_MODE_IGN_ALMP:
     case CXL_COMP_MODE_INJ_BIT_ERR:
@@ -61,8 +62,9 @@ static void do_compliance_req(pcie_dev *dev, uint32_t idx)
         },
     };
 
-    doe_cap = doe_get_cap_by_prot(dev,
-            DATA_OBJ_BUILD_HEADER1(CXL_VENDOR_ID, CXL_DOE_COMPLIANCE));
+    doe_cap = 0xd00;
+    /** doe_cap = doe_get_cap_by_prot(dev, */
+    /**         DATA_OBJ_BUILD_HEADER1(CXL_VENDOR_ID, CXL_DOE_COMPLIANCE)); */
     memcpy(comp_buf + 1, &req, req.header.doe_header.length * sizeof(uint32_t));
     doe_exchange_object(dev, doe_cap, comp_buf);
 }
@@ -73,6 +75,7 @@ void test_compliance(pcie_dev *dev)
     int i;
     CompRspHeader *rsp_hdr;
 
+    memset(comp_buf, 0x00, sizeof(comp_buf));
     rsp_hdr = (CompRspHeader *)comp_buf;
 
     do_compliance_req(dev, CXL_COMP_MODE_CAP);
@@ -81,7 +84,7 @@ void test_compliance(pcie_dev *dev)
     printf("DOE Type = %x\n", rsp_hdr->doe_header.doe_type);
     printf("Len(DW) = %x\n", rsp_hdr->doe_header.length);
 
-    printf("Type = %x\n", rsp_hdr->rsp_code);
+    printf("resp_code = %x\n", rsp_hdr->rsp_code);
     printf("Ver = %x\n", rsp_hdr->version);
     printf("Len(B) = %x\n", rsp_hdr->length);
 
@@ -90,7 +93,8 @@ void test_compliance(pcie_dev *dev)
         printf("\tcomp_buf[%02x] = %08x\n", i, comp_buf[i]);
     }
 
-    do_compliance_req(dev, CXL_COMP_MODE_BOGUS);
+
+    do_compliance_req(dev, CXL_COMP_MODE_INJ_VIRAL);
 
     printf("VID = %x\n", rsp_hdr->doe_header.vendor_id);
     printf("DOE Type = %x\n", rsp_hdr->doe_header.doe_type);
@@ -105,6 +109,7 @@ void test_compliance(pcie_dev *dev)
         printf("\tcomp_buf[%02x] = %08x\n", i, comp_buf[i]);
     }
 
+    return;
     do_compliance_req(dev, CXL_COMP_MODE_BOGUS);
 
     printf("VID = %x\n", rsp_hdr->doe_header.vendor_id);

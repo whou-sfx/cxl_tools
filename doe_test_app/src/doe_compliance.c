@@ -21,6 +21,17 @@ static void do_compliance_req(pcie_dev *dev, uint32_t idx)
 {
     uint32_t req_len, doe_cap;
     CompReq req;
+    req = (CompReq) {
+        .header = {
+            .doe_header = {
+                .vendor_id = CXL_VENDOR_ID,
+                .doe_type = CXL_DOE_COMPLIANCE,
+            },
+            .req_code = idx,
+            .version = 0xcc,
+        },
+    };
+
 
     switch (idx) {
     case CXL_COMP_MODE_CAP:
@@ -58,18 +69,8 @@ static void do_compliance_req(pcie_dev *dev, uint32_t idx)
     default:
         break;
     }
-
-    req = (CompReq) {
-        .header = {
-            .doe_header = {
-                .vendor_id = CXL_VENDOR_ID,
-                .doe_type = CXL_DOE_COMPLIANCE,
-                .length = DIV_ROUND_UP(req_len, sizeof(uint32_t)),
-            },
-            .req_code = idx,
-            .version = 0xcc,
-        },
-    };
+    
+    req.header.doe_header.length = DIV_ROUND_UP(req_len, sizeof(uint32_t)),
 
     doe_cap = 0xd00;
     /** doe_cap = doe_get_cap_by_prot(dev, */

@@ -82,8 +82,8 @@ static long doe_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		doe_dev = container_of(inode->i_cdev, typeof(*doe_dev), cdev);
 
 		copy_from_user(req_buf, (void __user *)arg, req_size);
-		dev_info(&doe_dev->pdev->dev, "buf: %x %x %x %x, req_size=%x\n", 
-				req_buf[0], req_buf[1], req_buf[2], req_buf[3], req_size);
+		dev_info(&doe_dev->pdev->dev, "buf: %08x %08x %08x %08x %08x %08x, req_size=%x\n", 
+				req_buf[0], req_buf[1], req_buf[2], req_buf[3], req_buf[4], req_buf[5], req_size);
 		/* Find the struct doe_node corresponding to the offset info from user */
 		for (doe_node = doe_dev->doe_head; doe_node;
 			doe_node = doe_node->next) {

@@ -1,0 +1,10 @@
+[Unit]
+Description=Power Cycle Check Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/power_cycle_check.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

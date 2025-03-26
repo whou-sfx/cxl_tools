@@ -10,8 +10,6 @@
 
 
 
-#!/bin/bash
-
 # 设置测试时长（秒）
 DURATION=36000
 START_TIME=$(date +%s)
@@ -21,6 +19,9 @@ LOG_FILE="mlc_numa1_test_$(date +%Y%m%d_%H%M%S).log"
 
 # 初始化 loop count
 LOOP_COUNT=1
+
+
+sudo su -c "echo 4000 > /proc/sys/vm/nr_hugepages"
 
 # 循环运行 MLC 测试
 while [ $(($(date +%s) - START_TIME)) -lt $DURATION ]; do

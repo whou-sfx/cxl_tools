@@ -2,7 +2,32 @@
 
 loop=$1
 
-bar2_base=0x8df7fe00000
+# 获取设备的 PCI 地址（BDF）
+DEVICE=$(lspci -d cc53: | awk '{print $1}')
+
+# 检查是否找到设备
+if [ -z "$DEVICE" ]; then
+    echo "未找到设备：cc53"
+    exit 1
+fi
+
+# 打印设备的 BDF 信息
+echo "设备的 BDF 信息为：$DEVICE"
+
+# 获取 Region 2 的基地址
+BAR2=$(lspci -s $DEVICE -vvv | grep -i "Region 2" | awk '{print $5}')
+
+# 检查是否找到 BAR2
+if [ -z "$BAR2" ]; then
+    echo "未找到 BAR2 基地址"
+    exit 1
+fi
+
+# 输出 BAR2 基地址
+echo "设备 $DEVICE 的 BAR2 基地址为：0x$BAR2"
+
+bar2_base=0x$BAR2
+
 ((mem_dev_reg_base = bar2_base + 0x10000))
 payload_sz=2048
 mb_start=0x100

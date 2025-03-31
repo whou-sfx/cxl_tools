@@ -34,18 +34,18 @@ def get_bars_from_lspci(pci_slot):
         
         bars = []
         pattern = re.compile(
-            r"Memory at (\w+) \((.*?)\) \[size=(\d+)([KMG]?B?)\]"
+            r"Region (\d+): Memory at (\w+) \((.*?)\) \[size=(\d+)([KMG]?B?)\]"
         )
         
-        bar_num = 0
         for line in output.split('\n'):
-            if 'Memory at' in line:
+            if 'Region' in line and 'Memory at' in line:
                 match = pattern.search(line)
                 if match:
-                    address = int(match.group(1), 16)
-                    flags = match.group(2)
-                    size_str = match.group(3)
-                    unit = match.group(4)
+                    bar_num = int(match.group(1))  # 从Region编号获取bar_num
+                    address = int(match.group(2), 16)
+                    flags = match.group(3)
+                    size_str = match.group(4)
+                    unit = match.group(5)
                     
                     size = convert_size(size_str, unit)
                     bar_type = "MEM"
@@ -59,7 +59,6 @@ def get_bars_from_lspci(pci_slot):
                         'type': f"{bar_type} {prefetch}".strip(),
                         '64bit': is_64bit
                     })
-                    bar_num += 1
         return bars
     except Exception as e:
         print(f"错误: 无法解析lspci输出 - {str(e)}", file=sys.stderr)

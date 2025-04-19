@@ -29,7 +29,7 @@ while [ $(($(date +%s) - START_TIME)) -lt $DURATION ]; do
     echo "===== Loop $LOOP_COUNT | Timestamp: $(date +"%Y-%m-%d %H:%M:%S") =====" | tee -a $LOG_FILE
     
     # 运行 MLC 带宽测试
-    #
+    # sudo numactl --membind=2 ./mlc --peak_injection_bandwidth
     #sudo numactl --membind=1 --cpunodebind=1 ./mlc --bandwidth_matrix | tee -a $LOG_FILE
     sudo numactl --membind=1 ./mlc --loaded_latency | tee -a $LOG_FILE
 

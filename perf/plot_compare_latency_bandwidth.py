@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import sys
+from scipy.interpolate import make_interp_spline
 
 # 读取文件
 def read_data(file_path):
@@ -14,11 +15,17 @@ def read_data(file_path):
 
 # 绘制趋势曲线
 def plot_trend(bandwidth, latency, label, color):
-    # 使用多项式拟合
-    z = np.polyfit(bandwidth, latency, 3)  # 3次多项式拟合
-    p = np.poly1d(z)
-    bandwidth_sorted = np.sort(bandwidth)
-    plt.plot(bandwidth_sorted, p(bandwidth_sorted), color=color, label=label)
+    # 对带宽进行排序
+    sorted_idx = np.argsort(bandwidth)
+    bandwidth_sorted = bandwidth[sorted_idx]
+    latency_sorted = latency[sorted_idx]
+    
+    # 生成平滑曲线
+    spline = make_interp_spline(bandwidth_sorted, latency_sorted, k=3)  # 使用3次样条
+    bandwidth_smooth = np.linspace(bandwidth_sorted.min(), bandwidth_sorted.max(), 500)
+    latency_smooth = spline(bandwidth_smooth)
+    
+    plt.plot(bandwidth_smooth, latency_smooth, color=color, label=label)
 
 # 主函数
 def main():

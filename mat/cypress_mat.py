@@ -63,8 +63,8 @@ if __name__ == '__main__':
 
     (opt, args) = parser.parse_args()
 
-    if not (opt.bin_path and opt.cfg0_path and opt.cfg1_path and opt.cfg2_path and opt.sn):
-        print("\nError: All file paths and SN must be provided!\n")
+    if not (opt.bin_path and opt.cfg0_path and opt.cfg1_path and opt.cfg2_path):
+        print("\nError: All file paths must be provided!\n")
         parser.print_help()
         sys.exit(-1)
 
@@ -179,24 +179,27 @@ if __name__ == '__main__':
                 print(f"\n\033[1;31m{cfg_name} update: FAILED\033[0m")
                 sys.exit(-1)
 
-    # 更新 Mat 信息
-    print("\n\033[1;36m=== Step 3: Updating Mat Info ===\033[0m")
-    print("\033[1;33mSending Mat update command...\033[0m")
-    mat_cmd = f"writematheader {opt.sn} opn-1 MCM500 A1 ScaleFlux Cypress"
-    send_chunked_command(s, mat_cmd)  # 使用分块发送函数
+    # 更新 Mat 信息（如果提供了 --sn 参数）
+    if opt.sn:
+        print("\n\033[1;36m=== Step 3: Updating Mat Info ===\033[0m")
+        print("\033[1;33mSending Mat update command...\033[0m")
+        mat_cmd = f"writematheader {opt.sn} opn-1 MCM500 A1 ScaleFlux Cypress"
+        send_chunked_command(s, mat_cmd)  # 使用分块发送函数
 
-    # 输出串口回送字符
-    output = ""
-    while s.in_waiting > 0:
-        output += s.read(s.in_waiting).decode('latin-1')
-    print(output, end='')
+        # 输出串口回送字符
+        output = ""
+        while s.in_waiting > 0:
+            output += s.read(s.in_waiting).decode('latin-1')
+        print(output, end='')
 
-    # 检测是否成功
-    if "successfully executed vu: writematheader command!" in output:
-        print("\n\033[1;32mMat update: SUCCESS\033[0m")
+        # 检测是否成功
+        if "successfully executed vu: writematheader command!" in output:
+            print("\n\033[1;32mMat update: SUCCESS\033[0m")
+        else:
+            print("\n\033[1;31mMat update: FAILED\033[0m")
+            sys.exit(-1)
     else:
-        print("\n\033[1;31mMat update: FAILED\033[0m")
-        sys.exit(-1)
+        print("\n\033[1;33m=== Step 3: Skipping Mat Info Update (--sn not provided) ===\033[0m")
 
     # 设置频率为 4800
     print("\n\033[1;36m=== Step 4: Setting Frequency to 4800 ===\033[0m")

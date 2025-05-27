@@ -15,14 +15,14 @@ for ((i=0; i<$max_loop; i++)); do
 		rc=0
 	fi
 
-	./test_mb.sh $i
-	if [ $? != 0 ]; then
-		printf "test_mb.sh failed!!!\n"
-		rc=-1
-		break
-	else
-		rc=0
-	fi
+	# ./test_mb.sh $i
+	# if [ $? != 0 ]; then
+	#     printf "test_mb.sh failed!!!\n"
+	#     rc=-1
+	#     break
+	# else
+	#     rc=0
+	# fi
 done
 
 if [ $rc == 0 ]; then

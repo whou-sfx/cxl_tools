@@ -1,4 +1,5 @@
 # Make sure debug is turned on
+
 setpci -s 81:00.0 0x008.l=0x00000001
 
 gcc -o memTest memTest.cc

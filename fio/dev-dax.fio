@@ -3,7 +3,7 @@ bs=2m
 ioengine=dev-dax
 norandommap
 time_based
-runtime=30s
+runtime=30m
 group_reporting
 disable_lat=1
 disable_slat=1
@@ -16,10 +16,10 @@ cpus_allowed_policy=split
 #   IOs always complete immediately
 #   IOs are always direct
 #
-iodepth=128
+iodepth=1
 direct=0
 thread
-numjobs=1
+numjobs=64
 #
 # The dev-dax engine does IO to DAX device that are special character
 # devices exported by the kernel (e.g. /dev/dax0.0). The device is

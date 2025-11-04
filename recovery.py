@@ -71,7 +71,7 @@ import logging
 import pyprind
 
 prompt = "SN@OPN:"
-comport = "/dev/ttyUSB0"
+comport = "/dev/ttyCH343USB0"
 global ret
 ret  = "".encode()
 
@@ -83,7 +83,7 @@ def putc(data, timeout=1):
     bar.update()
     return s.write(data)
 
-def sendbin(cmd):
+def sendbin(cmd, sleep_time=1.0):
     strOut = ""
     print(f"send {cmd} command")
     # 逐个字符发送
@@ -91,10 +91,11 @@ def sendbin(cmd):
         s.write(char.encode())
         time.sleep(0.1)  # 每个字符发送后休眠 0.1 秒
     s.write("\r\n".encode())  # 发送换行符
-    time.sleep(1)  # 等待 1 秒以确保设备处理命令
+    time.sleep(sleep_time)  # 等待 0.1 秒以确保设备处理命令
     try:
         ret = s.read(32)
-        strOut = (ret.decode())
+        strOut = ret.decode()
+        print(f"Debug: Received output: {strOut}")
     except:
         pass
     return strOut
@@ -103,13 +104,19 @@ def upgrade_process(cmd, bin_path):
     global bar  # 定义 bar 为全局变量
     statinfo_bin = os.stat(bin_path)
     bar = pyprind.ProgBar(statinfo_bin.st_size/128+2)  # 初始化进度条
-    comOutput = sendbin(cmd)
-    while "NCCC" not in comOutput:
-        comOutput = sendbin(cmd)
+    sleep_time = 0.1 if cmd == "rdl" else 1.0  # 根据 cmd 设置 sleep_time
+    comOutput = sendbin(cmd, sleep_time)
+    while "NCC" not in comOutput:
+        comOutput = sendbin(cmd, sleep_time)
     
     stream = open(bin_path, 'rb')
     m = xmodem.XMODEM(getc, putc)
-    m.send(stream)
+    result = None  # 初始化结果变量
+    try:
+        m.send(stream)  # 捕获返回值
+    except Exception as e:
+        print(f"Error: XMODEM transmission failed with exception: {e}")
+        sys.exit(1)
     print(f"\n{cmd} dnld done")
 
     # 串口打印回显，直到最后输出不为 "DDR data init start" 并且1秒内无输出
@@ -118,6 +125,9 @@ def upgrade_process(cmd, bin_path):
     while True:
         if s.in_waiting > 0:
             output = s.read(s.in_waiting).decode('utf-8', errors='ignore')
+            if "xmodem finished with:-2" in output:  # 检查是否包含特定字符串
+                print(f"Error: Detected XMODEM failure: {output}")
+                sys.exit(1)  # 退出脚本
             print(output, end='', flush=True)
             last_output = output  # 更新最后输出
             last_output_time = time.time()

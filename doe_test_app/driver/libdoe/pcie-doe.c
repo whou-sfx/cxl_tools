@@ -117,7 +117,6 @@ int pcie_doe_init(struct pcie_doe *doe, struct pci_dev *pdev, int doe_offset,
 
 void pcie_doe_fini(struct pci_dev *pdev)
 {
-	pci_free_irq_vectors(pdev);
 	if (g_doe) {
 		if (g_doe->use_int) {
 			devm_free_irq(&pdev->dev, g_irq_vector, g_doe);
@@ -126,6 +125,8 @@ void pcie_doe_fini(struct pci_dev *pdev)
 		}
 		g_doe = NULL;
 	}
+
+	pci_free_irq_vectors(pdev);
 }
 
 

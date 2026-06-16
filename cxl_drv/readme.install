@@ -1,0 +1,14 @@
+make clean
+make modules
+# 2. 确认内核版本一致
+uname -r
+# 需已安装对应 headers，例如：
+# sudo apt install linux-headers-$(uname -r)
+# 3. 安装到 /lib/modules/$(uname -r)/updates/
+sudo make modules_install
+# 4. 更新模块依赖（updates/ 优先级高于 kernel/）
+sudo depmod -a
+# 5. 卸载旧模块并加载新模块（按依赖顺序）
+sudo modprobe -r cxl_pci cxl_mem cxl_acpi cxl_pmem cxl_port cxl_core 2>/dev/null
+sudo modprobe cxl_core
+sudo modprobe cxl_port cxl_acpi cxl_pmem cxl_mem cxl_pci

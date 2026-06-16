@@ -1,0 +1,91 @@
+commit 811c2bb8141b3b0d782727414c42db188753db75
+Author: jurianli <15568601+jurianli@user.noreply.gitee.com>
+Date:   Wed Dec 17 11:02:42 2025 +0800
+
+    1. fix cxl reg map is always invalid issue
+
+diff --git a/drivers/cxl/core/regs.c b/drivers/cxl/core/regs.c
+index 5ca7b0eed..4b560384d 100644
+--- a/drivers/cxl/core/regs.c
++++ b/drivers/cxl/core/regs.c
+@@ -305,10 +305,15 @@ static int __cxl_find_regblock_instance(struct pci_dev *pdev, enum cxl_regloc_ty
+ 	int instance = 0;
+ 	int regloc, i;
+ 
++#if 0
+ 	*map = (struct cxl_register_map) {
+ 		.host = &pdev->dev,
+ 		.resource = CXL_RESOURCE_NONE,
+ 	};
++#else
++    map->host = &pdev->dev;
++    map->resource = CXL_RESOURCE_NONE;
++#endif
+ 
+ 	regloc = pci_find_dvsec_capability(pdev, PCI_VENDOR_ID_CXL,
+ 					   CXL_DVSEC_REG_LOCATOR);
+diff --git a/drivers/cxl/cxl.h b/drivers/cxl/cxl.h
+index 540cc2664..7592eb2a3 100644
+--- a/drivers/cxl/cxl.h
++++ b/drivers/cxl/cxl.h
+@@ -291,11 +291,9 @@ struct cxl_register_map {
+ 	resource_size_t resource;
+ 	resource_size_t max_size;
+ 	u8 reg_type;
+-	struct {
+-		struct cxl_component_reg_map component_map;
+-		struct cxl_device_reg_map device_map;
+-		struct cxl_pmu_reg_map pmu_map;
+-	};
++	struct cxl_component_reg_map component_map;
++	struct cxl_device_reg_map device_map;
++	struct cxl_pmu_reg_map pmu_map;
+ };
+ 
+ void cxl_probe_component_regs(struct device *dev, void __iomem *base,
+diff --git a/drivers/cxl/pci.c b/drivers/cxl/pci.c
+index e7a216c15..35bce61ff 100644
+--- a/drivers/cxl/pci.c
++++ b/drivers/cxl/pci.c
+@@ -1022,6 +1022,10 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+         dev_err(&pdev->dev, "cxl_pci_setup_regs failed: %d\n", rc);
+ 		return rc;
+     }
++    //dev_info(&pdev->dev, "%d mbox:%d status:%d memdev:%d hdm_decoder:%d ras:%d pmu:%d\n", __LINE__,
++    //        cxlds->reg_map.device_map.mbox.valid, cxlds->reg_map.device_map.status.valid, cxlds->reg_map.device_map.memdev.valid,
++    //        cxlds->reg_map.component_map.hdm_decoder.valid, cxlds->reg_map.component_map.ras.valid,
++    //        cxlds->reg_map.pmu_map.pmu.valid);
+ 
+ 	rc = cxl_map_device_regs(&cxlds->reg_map, &cxlds->regs.device_regs);
+ 	if (rc) {
+@@ -1033,12 +1037,15 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 	 * If the component registers can't be found, the cxl_pci driver may
+ 	 * still be useful for management functions so don't return an error.
+ 	 */
+-	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_COMPONENT,
+-				&cxlds->reg_map);
++	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_COMPONENT, &cxlds->reg_map);
+ 	if (rc)
+ 		dev_warn(&pdev->dev, "No component registers (%d)\n", rc);
+ 	else if (!cxlds->reg_map.component_map.ras.valid)
+ 		dev_dbg(&pdev->dev, "RAS registers not found\n");
++    //dev_info(&pdev->dev, "%d mbox:%d status:%d memdev:%d hdm_decoder:%d ras:%d pmu:%d\n", __LINE__,
++    //        cxlds->reg_map.device_map.mbox.valid, cxlds->reg_map.device_map.status.valid, cxlds->reg_map.device_map.memdev.valid,
++    //        cxlds->reg_map.component_map.hdm_decoder.valid, cxlds->reg_map.component_map.ras.valid,
++    //        cxlds->reg_map.pmu_map.pmu.valid);
+ 
+ 	rc = cxl_map_component_regs(&cxlds->reg_map, &cxlds->regs.component,
+ 				    BIT(CXL_CM_CAP_CAP_ID_RAS));
+diff --git a/drivers/dax/cxl.c b/drivers/dax/cxl.c
+index 011bd1dc7..d14b6d43e 100644
+--- a/drivers/dax/cxl.c
++++ b/drivers/dax/cxl.c
+@@ -15,6 +15,8 @@ static int __cxl_dax_add_resource(struct dax_region *dax_region,
+ 
+ 	start = dax_region->res.start + region_extent->hpa_range.start;
+ 	length = range_len(&region_extent->hpa_range);
++	dev_dbg(dax_region->dev, "__cxl_dax_add_resource Adding resource HPA %pra\n", &region_extent->hpa_range);
++
+ 	return dax_region_add_resource(dax_region, dev, start, length);
+ }
+ 

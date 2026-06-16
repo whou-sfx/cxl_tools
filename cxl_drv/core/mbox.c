@@ -48,9 +48,9 @@ static bool cxl_raw_allow_all;
  */
 static struct cxl_mem_command cxl_mem_commands[CXL_MEM_COMMAND_ID_MAX] = {
 	CXL_CMD(IDENTIFY, 0, 0x43, CXL_CMD_FLAG_FORCE_ENABLE),
-#ifdef CONFIG_CXL_MEM_RAW_COMMANDS
+//#ifdef CONFIG_CXL_MEM_RAW_COMMANDS
 	CXL_CMD(RAW, CXL_VARIABLE_PAYLOAD, CXL_VARIABLE_PAYLOAD, 0),
-#endif
+//#endif
 	CXL_CMD(GET_SUPPORTED_LOGS, 0, CXL_VARIABLE_PAYLOAD, CXL_CMD_FLAG_FORCE_ENABLE),
 	CXL_CMD(GET_FW_INFO, 0, 0x50, 0),
 	CXL_CMD(GET_PARTITION_INFO, 0, 0x20, 0),
@@ -288,8 +288,8 @@ static bool cxl_mem_raw_command_allowed(u16 opcode)
 {
 	int i;
 
-	if (!IS_ENABLED(CONFIG_CXL_MEM_RAW_COMMANDS))
-		return false;
+	//if (!IS_ENABLED(CONFIG_CXL_MEM_RAW_COMMANDS))
+	//	return false;
 
 	if (security_locked_down(LOCKDOWN_PCI_ACCESS))
 		return false;
@@ -495,19 +495,25 @@ static int cxl_validate_cmd_from_user(struct cxl_mbox_cmd *mbox_cmd,
 				      struct cxl_mailbox *cxl_mbox,
 				      const struct cxl_send_command *send_cmd)
 {
+	struct device *dev = cxl_mbox->host;
 	struct cxl_mem_command mem_cmd;
 	int rc;
 
-	if (send_cmd->id == 0 || send_cmd->id >= CXL_MEM_COMMAND_ID_MAX)
+	if (send_cmd->id == 0 || send_cmd->id >= CXL_MEM_COMMAND_ID_MAX) {
+		dev_dbg(dev, "Send IOCTL validate: invalid id %u\n", send_cmd->id);
 		return -ENOTTY;
+	}
 
 	/*
 	 * The user can never specify an input payload larger than what hardware
 	 * supports, but output can be arbitrarily large (simply write out as
 	 * much data as the hardware provides).
 	 */
-	if (send_cmd->in.size > cxl_mbox->payload_size)
+	if (send_cmd->in.size > cxl_mbox->payload_size) {
+		dev_dbg(dev, "Send IOCTL validate: in.size %u > payload_size %zu\n",
+			send_cmd->in.size, cxl_mbox->payload_size);
 		return -EINVAL;
+	}
 
 	/* Sanitize and construct a cxl_mem_command */
 	if (send_cmd->id == CXL_MEM_COMMAND_ID_RAW)
@@ -515,13 +521,20 @@ static int cxl_validate_cmd_from_user(struct cxl_mbox_cmd *mbox_cmd,
 	else
 		rc = cxl_to_mem_cmd(&mem_cmd, send_cmd, cxl_mbox);
 
-	if (rc)
+	if (rc) {
+		dev_dbg(dev, "Send IOCTL validate: to_mem_cmd failed rc=%d id=%u, opcode=%#x\n",
+			rc, send_cmd->id, mem_cmd.opcode);
 		return rc;
+	}
 
 	/* Sanitize and construct a cxl_mbox_cmd */
-	return cxl_mbox_cmd_ctor(mbox_cmd, cxl_mbox, mem_cmd.opcode,
-				 mem_cmd.info.size_in, mem_cmd.info.size_out,
-				 send_cmd->in.payload);
+	rc = cxl_mbox_cmd_ctor(mbox_cmd, cxl_mbox, mem_cmd.opcode,
+			       mem_cmd.info.size_in, mem_cmd.info.size_out,
+			       send_cmd->in.payload);
+	if (rc)
+		dev_dbg(dev, "Send IOCTL validate: mbox_cmd_ctor failed rc=%d opcode=%#x\n",
+			rc, mem_cmd.opcode);
+	return rc;
 }
 
 int cxl_query_cmd(struct cxl_mailbox *cxl_mbox,
@@ -624,6 +637,9 @@ static int handle_mailbox_cmd_from_user(struct cxl_mailbox *cxl_mbox,
 	*retval = mbox_cmd->return_code;
 
 out:
+	if (rc)
+		dev_dbg(dev, "Send IOCTL handle: exit rc=%d opcode=%#x retval=%#x\n",
+			rc, mbox_cmd->opcode, mbox_cmd->return_code);
 	cxl_mbox_cmd_dtor(mbox_cmd);
 	return rc;
 }
@@ -637,8 +653,10 @@ int cxl_send_cmd(struct cxl_mailbox *cxl_mbox, struct cxl_send_command __user *s
 
 	dev_dbg(dev, "Send IOCTL\n");
 
-	if (copy_from_user(&send, s, sizeof(send)))
+	if (copy_from_user(&send, s, sizeof(send))) {
+		dev_dbg(dev, "Send IOCTL exit: copy_from_user failed\n");
 		return -EFAULT;
+	}
 
 	rc = cxl_validate_cmd_from_user(&mbox_cmd, cxl_mbox, &send);
 	if (rc)
@@ -646,11 +664,16 @@ int cxl_send_cmd(struct cxl_mailbox *cxl_mbox, struct cxl_send_command __user *s
 
 	rc = handle_mailbox_cmd_from_user(cxl_mbox, &mbox_cmd, send.out.payload,
 					  &send.out.size, &send.retval);
-	if (rc)
+	if (rc) {
+		dev_dbg(dev, "Send IOCTL exit: handle failed rc=%d id=%u\n",
+			rc, send.id);
 		return rc;
+	}
 
-	if (copy_to_user(s, &send, sizeof(send)))
+	if (copy_to_user(s, &send, sizeof(send))) {
+		dev_dbg(dev, "Send IOCTL exit: copy_to_user failed\n");
 		return -EFAULT;
+	}
 
 	return 0;
 }

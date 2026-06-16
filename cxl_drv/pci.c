@@ -1044,14 +1044,15 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	for (i = 0; i < pmu_count; i++) {
 		struct cxl_pmu_regs pmu_regs;
+        struct cxl_register_map pmu_map;
 
-		rc = cxl_find_regblock_instance(pdev, CXL_REGLOC_RBI_PMU, &cxlds->reg_map, i);
+		rc = cxl_find_regblock_instance(pdev, CXL_REGLOC_RBI_PMU, &pmu_map, i);
 		if (rc) {
 			dev_dbg(&pdev->dev, "Could not find PMU regblock\n");
 			break;
 		}
 
-		rc = cxl_map_pmu_regs(&cxlds->reg_map, &pmu_regs);
+		rc = cxl_map_pmu_regs(&pmu_map, &pmu_regs);
 		if (rc) {
 			dev_dbg(&pdev->dev, "Could not map PMU regs\n");
 			break;

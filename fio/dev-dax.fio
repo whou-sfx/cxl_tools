@@ -38,8 +38,8 @@ filename=/dev/dax0.0
 
 [dev-dax-write]
 rw=randwrite
-stonewall
+#stonewall
 
 [dev-dax-read]
 rw=randread
-stonewall
+#stonewall

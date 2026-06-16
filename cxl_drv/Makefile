@@ -13,6 +13,11 @@
 #
 # Override kernel build tree if needed:
 #   make KERNEL_SRC=/path/to/kernel/build modules
+#
+# Enable dev_dbg after insmod (requires CONFIG_DYNAMIC_DEBUG=y):
+#   echo 'file drivers/cxl/* +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+# Or by module name (works even without prefix-map):
+#   echo 'module cxl_pci +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
 
 ifneq ($(KERNELRELEASE),)
 
@@ -40,9 +45,14 @@ cxl_pci-y := pci.o
 
 else
 # Out-of-tree standalone build
+#
+# Remap __FILE__ to drivers/cxl/... so dynamic_debug works with:
+#   echo 'file drivers/cxl/* +p' > /sys/kernel/debug/dynamic_debug/control
 
 ccflags-y += -I$(src)
-CFLAGS_trace.o = -DTRACE_INCLUDE_PATH=$(src)/core -I$(src)/core
+ccflags-y += -fmacro-prefix-map=$(abspath $(src))=drivers/cxl
+CFLAGS_core/trace.o = -DTRACE_INCLUDE_PATH=$(src)/core -I$(src)/core
+
 
 obj-m += cxl_core.o
 obj-m += cxl_port.o

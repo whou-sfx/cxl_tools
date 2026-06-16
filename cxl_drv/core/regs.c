@@ -305,10 +305,15 @@ static int __cxl_find_regblock_instance(struct pci_dev *pdev, enum cxl_regloc_ty
 	int instance = 0;
 	int regloc, i;
 
+#if 0
 	*map = (struct cxl_register_map) {
 		.host = &pdev->dev,
 		.resource = CXL_RESOURCE_NONE,
 	};
+#else
+    map->host = &pdev->dev;
+    map->resource = CXL_RESOURCE_NONE;
+#endif
 
 	regloc = pci_find_dvsec_capability(pdev, PCI_VENDOR_ID_CXL,
 					   CXL_DVSEC_REG_LOCATOR);

@@ -285,11 +285,9 @@ struct cxl_register_map {
 	resource_size_t resource;
 	resource_size_t max_size;
 	u8 reg_type;
-	union {
-		struct cxl_component_reg_map component_map;
-		struct cxl_device_reg_map device_map;
-		struct cxl_pmu_reg_map pmu_map;
-	};
+	struct cxl_component_reg_map component_map;
+	struct cxl_device_reg_map device_map;
+	struct cxl_pmu_reg_map pmu_map;
 };
 
 void cxl_probe_component_regs(struct device *dev, void __iomem *base,

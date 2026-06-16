@@ -906,7 +906,6 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct cxl_dpa_info range_info = { 0 };
 	struct cxl_memdev_state *mds;
 	struct cxl_dev_state *cxlds;
-	struct cxl_register_map map;
 	struct cxl_memdev *cxlmd;
 	int rc, pmu_count;
 	unsigned int i;
@@ -920,13 +919,17 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		     offsetof(struct cxl_regs, device_regs.memdev));
 
 	rc = pcim_enable_device(pdev);
-	if (rc)
+	if (rc) {
+        dev_err(&pdev->dev, "pcim_enable_device failed: %d\n", rc);
 		return rc;
+    }
 	pci_set_master(pdev);
 
 	mds = cxl_memdev_state_create(&pdev->dev);
-	if (IS_ERR(mds))
+	if (IS_ERR(mds)) {
+        dev_err(&pdev->dev, "cxl_memdev_state_create failed: %p\n", mds);
 		return PTR_ERR(mds);
+    }
 	cxlds = &mds->cxlds;
 	pci_set_drvdata(pdev, cxlds);
 
@@ -938,24 +941,35 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_warn(&pdev->dev,
 			 "Device DVSEC not present, skip CXL.mem init\n");
 
-	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_MEMDEV, &map);
-	if (rc)
+	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_MEMDEV, &cxlds->reg_map);
+	if (rc) {
+        dev_err(&pdev->dev, "cxl_pci_setup_regs failed: %d\n", rc);
 		return rc;
+    }
+    //dev_info(&pdev->dev, "%d mbox:%d status:%d memdev:%d hdm_decoder:%d ras:%d pmu:%d\n", __LINE__,
+    //        cxlds->reg_map.device_map.mbox.valid, cxlds->reg_map.device_map.status.valid, cxlds->reg_map.device_map.memdev.valid,
+    //        cxlds->reg_map.component_map.hdm_decoder.valid, cxlds->reg_map.component_map.ras.valid,
+    //        cxlds->reg_map.pmu_map.pmu.valid);
 
-	rc = cxl_map_device_regs(&map, &cxlds->regs.device_regs);
-	if (rc)
+	rc = cxl_map_device_regs(&cxlds->reg_map, &cxlds->regs.device_regs);
+	if (rc) {
+        dev_err(&pdev->dev, "cxl_map_device_regs failed: %d\n", rc);
 		return rc;
+    }
 
 	/*
 	 * If the component registers can't be found, the cxl_pci driver may
 	 * still be useful for management functions so don't return an error.
 	 */
-	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_COMPONENT,
-				&cxlds->reg_map);
+	rc = cxl_pci_setup_regs(pdev, CXL_REGLOC_RBI_COMPONENT, &cxlds->reg_map);
 	if (rc)
 		dev_warn(&pdev->dev, "No component registers (%d)\n", rc);
 	else if (!cxlds->reg_map.component_map.ras.valid)
 		dev_dbg(&pdev->dev, "RAS registers not found\n");
+    //dev_info(&pdev->dev, "%d mbox:%d status:%d memdev:%d hdm_decoder:%d ras:%d pmu:%d\n", __LINE__,
+    //        cxlds->reg_map.device_map.mbox.valid, cxlds->reg_map.device_map.status.valid, cxlds->reg_map.device_map.memdev.valid,
+    //        cxlds->reg_map.component_map.hdm_decoder.valid, cxlds->reg_map.component_map.ras.valid,
+    //        cxlds->reg_map.pmu_map.pmu.valid);
 
 	rc = cxl_map_component_regs(&cxlds->reg_map, &cxlds->regs.component,
 				    BIT(CXL_CM_CAP_CAP_ID_RAS));
@@ -963,8 +977,10 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		dev_dbg(&pdev->dev, "Failed to map RAS capability.\n");
 
 	rc = cxl_pci_type3_init_mailbox(cxlds);
-	if (rc)
+	if (rc) {
+        dev_err(&pdev->dev, "cxl_pci_type3_init_mailbox failed: %d\n", rc);
 		return rc;
+    }
 
 	rc = cxl_await_media_ready(cxlds);
 	if (rc == 0)
@@ -1029,13 +1045,13 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	for (i = 0; i < pmu_count; i++) {
 		struct cxl_pmu_regs pmu_regs;
 
-		rc = cxl_find_regblock_instance(pdev, CXL_REGLOC_RBI_PMU, &map, i);
+		rc = cxl_find_regblock_instance(pdev, CXL_REGLOC_RBI_PMU, &cxlds->reg_map, i);
 		if (rc) {
 			dev_dbg(&pdev->dev, "Could not find PMU regblock\n");
 			break;
 		}
 
-		rc = cxl_map_pmu_regs(&map, &pmu_regs);
+		rc = cxl_map_pmu_regs(&cxlds->reg_map, &pmu_regs);
 		if (rc) {
 			dev_dbg(&pdev->dev, "Could not map PMU regs\n");
 			break;

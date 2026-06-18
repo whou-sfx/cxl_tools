@@ -1,0 +1,91 @@
+commit bd4820dc1ebf47cc6ecad3e698ba23beda8a2e2e
+Author: Jurian Li <jurian.li@scaleflux.com>
+Date:   Tue Feb 10 17:07:04 2026 +0800
+
+    if BIOS cfg is x4x4x4x4 on AMD 2.0 server(82), will trigger cxl hb probe failed
+    just skip this issue by default
+
+diff --git a/drivers/cxl/core/pci.c b/drivers/cxl/core/pci.c
+index fbdabce5e..052ebf3e9 100644
+--- a/drivers/cxl/core/pci.c
++++ b/drivers/cxl/core/pci.c
+@@ -41,7 +41,7 @@ static int match_add_dports(struct pci_dev *pdev, void *data)
+ 	struct cxl_walk_context *ctx = data;
+ 	struct cxl_port *port = ctx->port;
+ 	int type = pci_pcie_type(pdev);
+-	struct cxl_register_map map;
++	struct cxl_register_map map = { };
+ 	struct cxl_dport *dport;
+ 	u32 lnkcap, port_num;
+ 	int rc;
+@@ -61,6 +61,15 @@ static int match_add_dports(struct pci_dev *pdev, void *data)
+ 		dev_dbg(&port->dev, "failed to find component registers\n");
+ 
+ 	port_num = FIELD_GET(PCI_EXP_LNKCAP_PN, lnkcap);
++    // skip if port_num is the same
++	struct cxl_dport *dup = find_dport(port, port_num);
++	if (dup) {
++		dev_err(&port->dev,
++			"jurian: unable to add dport%d-%s non-unique port id (%s), maybe caused by the cfg of x4x4x4x4 in BIOS\n",
++			port_num, dev_name(&pdev->dev), dev_name(dup->dport_dev));
++		return 0;
++	}
++
+ 	dport = devm_cxl_add_dport(port, &pdev->dev, port_num, map.resource);
+ 	if (IS_ERR(dport)) {
+ 		ctx->error = PTR_ERR(dport);
+diff --git a/drivers/cxl/core/port.c b/drivers/cxl/core/port.c
+index 80a44f7c2..3dbaae65e 100644
+--- a/drivers/cxl/core/port.c
++++ b/drivers/cxl/core/port.c
+@@ -1036,7 +1036,7 @@ struct cxl_root *find_cxl_root(struct cxl_port *port)
+ }
+ EXPORT_SYMBOL_NS_GPL(find_cxl_root, "CXL");
+ 
+-static struct cxl_dport *find_dport(struct cxl_port *port, int id)
++struct cxl_dport *find_dport(struct cxl_port *port, int id)
+ {
+ 	struct cxl_dport *dport;
+ 	unsigned long index;
+@@ -1047,6 +1047,7 @@ static struct cxl_dport *find_dport(struct cxl_port *port, int id)
+ 			return dport;
+ 	return NULL;
+ }
++EXPORT_SYMBOL_NS_GPL(find_dport, "CXL");
+ 
+ static int add_dport(struct cxl_port *port, struct cxl_dport *dport)
+ {
+@@ -1521,7 +1522,7 @@ static void cxl_detach_ep(void *data)
+ 
+ static resource_size_t find_component_registers(struct device *dev)
+ {
+-	struct cxl_register_map map;
++	struct cxl_register_map map = { };
+ 	struct pci_dev *pdev;
+ 
+ 	/*
+diff --git a/drivers/cxl/core/regs.c b/drivers/cxl/core/regs.c
+index 4b560384d..124631535 100644
+--- a/drivers/cxl/core/regs.c
++++ b/drivers/cxl/core/regs.c
+@@ -398,7 +398,7 @@ EXPORT_SYMBOL_NS_GPL(cxl_find_regblock, "CXL");
+  */
+ int cxl_count_regblock(struct pci_dev *pdev, enum cxl_regloc_type type)
+ {
+-	struct cxl_register_map map;
++	struct cxl_register_map map = { };
+ 
+ 	return __cxl_find_regblock_instance(pdev, type, &map, CXL_INSTANCES_COUNT);
+ }
+diff --git a/drivers/cxl/cxl.h b/drivers/cxl/cxl.h
+index 7592eb2a3..e9edb5501 100644
+--- a/drivers/cxl/cxl.h
++++ b/drivers/cxl/cxl.h
+@@ -780,6 +780,7 @@ static inline bool is_cxl_root(struct cxl_port *port)
+ int cxl_num_decoders_committed(struct cxl_port *port);
+ bool is_cxl_port(const struct device *dev);
+ struct cxl_port *to_cxl_port(const struct device *dev);
++struct cxl_dport *find_dport(struct cxl_port *port, int id);
+ struct cxl_port *parent_port_of(struct cxl_port *port);
+ void cxl_port_commit_reap(struct cxl_decoder *cxld);
+ struct pci_bus;

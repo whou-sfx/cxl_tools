@@ -4,58 +4,7 @@
 
 ---
 
-## 一、编译错误修复（Makefile）
-
-### 问题现象
-
-远端 make 时报错：
-
-```
-fatal error: trace/events/trace.h: No such file or directory
-  107 | # define __TRACE_INCLUDE(system) <trace/events/system.h>
-compilation terminated.
-make: *** [Makefile:88: modules] Error 2
-```
-
-### 根本原因
-
-kbuild 通过 `scripts/Makefile.lib` 中的 `target-stem` 变量来查找 per-file 编译标志：
-
-```makefile
-# scripts/Makefile.lib
-target-stem = $(basename $(patsubst $(obj)/%,%,$@))
-_c_flags = ... $(CFLAGS_$(target-stem).o)
-```
-
-out-of-tree 构建时，`trace.c` 的编译目标路径为 `$(obj)/core/trace.o`，所以：
-
-```
-target-stem = core/trace
-kbuild 实际查找的变量 = CFLAGS_core/trace.o
-```
-
-但 `Makefile` 中写的是 `CFLAGS_trace.o`，与 `core/trace` 不匹配，导致
-`-DTRACE_INCLUDE_PATH` 未传给编译器，`define_trace.h` 回落到默认路径
-`<trace/events/trace.h>`，文件不存在，编译失败。
-
-对比：上游 in-tree `drivers/cxl/core/Makefile` 中写的是 `CFLAGS_trace.o`，
-因为 in-tree 构建时源文件就在 `core/` 目录下，`target-stem` 为 `trace`，能匹配。
-
-### 修复方法
-
-将 `Makefile` out-of-tree 段中的变量名改为包含子目录前缀：
-
-```makefile
-# 修改前
-CFLAGS_trace.o = -DTRACE_INCLUDE_PATH=$(src)/core -I$(src)/core
-
-# 修改后
-CFLAGS_core/trace.o = -DTRACE_INCLUDE_PATH=$(src)/core -I$(src)/core
-```
-
----
-
-## 二、`cxl_pci_type3_init_mailbox failed: -19` 根因分析
+## 一、`cxl_pci_type3_init_mailbox failed: -19` 根因分析
 
 ### 上游"巧合机制"
 
@@ -96,7 +45,7 @@ device_map:    [ status(cxl_reg_map)      | mbox(cxl_reg_map) | memdev(cxl_reg_m
 
 ---
 
-## 三、Patch 链说明
+## 二、Patch 链说明
 
 ### patch1.diff — Jurian 第一版
 
@@ -171,6 +120,59 @@ for (i = 0; i < pmu_count; i++) {
 | patch1 | union→struct，MEMDEV 用 cxlds->reg_map | 已合并 |
 | patch2 | #if 0 禁用 compound literal 清零 | 已合并 |
 | patch3 | PMU 用局部 pmu_map | 已合并 |
+
+
+---
+
+## 三、编译错误修复（Makefile）
+
+### 问题现象
+
+远端 make 时报错：
+
+```
+fatal error: trace/events/trace.h: No such file or directory
+  107 | # define __TRACE_INCLUDE(system) <trace/events/system.h>
+compilation terminated.
+make: *** [Makefile:88: modules] Error 2
+```
+
+### 根本原因
+
+kbuild 通过 `scripts/Makefile.lib` 中的 `target-stem` 变量来查找 per-file 编译标志：
+
+```makefile
+# scripts/Makefile.lib
+target-stem = $(basename $(patsubst $(obj)/%,%,$@))
+_c_flags = ... $(CFLAGS_$(target-stem).o)
+```
+
+out-of-tree 构建时，`trace.c` 的编译目标路径为 `$(obj)/core/trace.o`，所以：
+
+```
+target-stem = core/trace
+kbuild 实际查找的变量 = CFLAGS_core/trace.o
+```
+
+但 `Makefile` 中写的是 `CFLAGS_trace.o`，与 `core/trace` 不匹配，导致
+`-DTRACE_INCLUDE_PATH` 未传给编译器，`define_trace.h` 回落到默认路径
+`<trace/events/trace.h>`，文件不存在，编译失败。
+
+对比：上游 in-tree `drivers/cxl/core/Makefile` 中写的是 `CFLAGS_trace.o`，
+因为 in-tree 构建时源文件就在 `core/` 目录下，`target-stem` 为 `trace`，能匹配。
+
+### 修复方法
+
+将 `Makefile` out-of-tree 段中的变量名改为包含子目录前缀：
+
+```makefile
+# 修改前
+CFLAGS_trace.o = -DTRACE_INCLUDE_PATH=$(src)/core -I$(src)/core
+
+# 修改后
+CFLAGS_core/trace.o = -DTRACE_INCLUDE_PATH=$(src)/core -I$(src)/core
+```
+
 
 ---
 

@@ -300,9 +300,11 @@ static bool cxl_mem_raw_command_allowed(u16 opcode)
 	if (cxl_is_security_command(opcode))
 		return false;
 
+    #if 0
 	for (i = 0; i < ARRAY_SIZE(cxl_disabled_raw_commands); i++)
 		if (cxl_disabled_raw_commands[i] == opcode)
 			return false;
+    #endif
 
 	return true;
 }

@@ -1,0 +1,45 @@
+diff --git a/drivers/cxl/core/pci.c b/drivers/cxl/core/pci.c
+index b50551601c2e..9a2ede4d1026 100644
+--- a/drivers/cxl/core/pci.c
++++ b/drivers/cxl/core/pci.c
+@@ -60,7 +60,19 @@ static int match_add_dports(struct pci_dev *pdev, void *data)
+ 	dport = devm_cxl_add_dport(port, &pdev->dev, port_num, map.resource);
+ 	if (IS_ERR(dport)) {
+ 		ctx->error = PTR_ERR(dport);
+-		return PTR_ERR(dport);
++		/*
++		 * WORKAROUND: some platform BIOS assign a duplicate PCIe
++		 * Link Capabilities "Port Number" to sibling root ports
++		 * under the same CXL host bridge, which makes add_dport()
++		 * reject the second one with -EBUSY. Skip the offending
++		 * dport instead of aborting the walk so the remaining,
++		 * non-colliding root ports (and any memdev behind them)
++		 * are not collaterally dropped.
++		 */
++		dev_warn(&port->dev,
++			 "cxl: skipping dport %s (duplicate PCIe Link Capabilities Port Number %u, err %ld). Devices behind this port will not work. This is a kernel workaround for a platform BIOS quirk - apply patch_dup_dport_port_num.diff on kernels < 6.19, or update to kernel >= 6.19 for the upstream fix (defer-dport-allocation) instead of relying on this workaround.\n",
++			 dev_name(&pdev->dev), port_num, PTR_ERR(dport));
++		return 0;
+ 	}
+ 	ctx->count++;
+ 
+@@ -97,8 +109,17 @@ int devm_cxl_port_enumerate_dports(struct cxl_port *port)
+ 
+ 	if (ctx.count == 0)
+ 		return -ENODEV;
+-	if (ctx.error)
+-		return ctx.error;
++	/*
++	 * WORKAROUND: do not fail the whole switch port probe just because
++	 * one sibling dport collided on a duplicate Port Number (see the
++	 * comment in match_add_dports()). Failing here would cause the
++	 * driver core to unwind *all* dports added during this probe
++	 * attempt (including healthy ones), not just the offending one.
++	 */
++	/*
++	 * if (ctx.error)
++	 *	return ctx.error;
++	 */
+ 	return ctx.count;
+ }
+ EXPORT_SYMBOL_NS_GPL(devm_cxl_port_enumerate_dports, "CXL");

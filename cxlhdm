@@ -1,0 +1,1097 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Time::HiRes qw(time);
+use Getopt::Long;
+use bigint;
+
+my $BOLD    = "\033[1m";
+my $RESET   = "\033[0m";
+
+my $GREEN   = "\033[32m";
+my $YELLOW  = "\033[33m$BOLD";
+my $PURPLE  = "\033[34m$BOLD";
+my $BLUE    = "\033[36m$BOLD";
+my $ORANGE  = "\033[38;5;208m";
+my $RED     = "\033[31m$BOLD";
+my $GRAY    = "\033[38;5;242m";
+
+my $zebu = 0;               # Hypervisor是否为KVM（zebu模式）
+my $COMMIT_TIMEOUT_MS;      # 提交超时时间（ms）
+my $g_verbose = 0;          # 全局打印控制
+my $g_debug = 0;            # only for debug
+my $cxl_cfmws;              # CFMV设备列表
+my @cxl_hbs;                # Host Bridge列表
+my @cxl_type3_devs;         # Type3设备列表
+my $SCRIPT_NAME = $0;       # 脚本名
+my $USAGE = "Usage:
+$SCRIPT_NAME commit: commit hdm decoder
+$SCRIPT_NAME commit <-m memX|-p portX> [-w iw] [-g ig] [-d decoder_idx] [-b hpa_base] [-s hpa_size] [-v/--verbose]
+$SCRIPT_NAME clear: clear hdm decoder
+$SCRIPT_NAME clear <-m memX|-p portX> [-d decoder_idx] [-v/--verbose]
+$SCRIPT_NAME: dump hdm decoders
+$SCRIPT_NAME [-v/--verbose]
+$SCRIPT_NAME -h/--help: dump this help";
+
+sub flag_to_color_str {
+    my ($str, $data, $bit, $color_if_set, $color_if_not_set) = @_;
+    if ($data & (1 << $bit)) {
+        if ($color_if_set) {
+            return "${color_if_set}${str}+${RESET}";
+        } else {
+            return "${str}+";
+        }
+    } else {
+        if ($color_if_not_set) {
+            return "${color_if_not_set}${str}-${RESET}";
+        } else {
+            return "${GRAY}${str}-${RESET}";
+        }
+    }
+}
+
+sub num_to_color_str {
+    my ($str, $num) = @_;
+    if ($num) {
+        return sprintf("%s=%d", $str, $num),
+    } else {
+        return sprintf("${GRAY}%s=%d${RESET}", $str, $num),
+    }
+}
+
+sub dump_hb_iw_rp_targets {
+    my ($targets_ref, $color) = @_;
+    printf("iwRpTargets={");
+    for my $i (0 .. $#$targets_ref-1) {
+        if ($color) {
+            printf("${color}%#lx${RESET},", $targets_ref->[$i]);
+        } else {
+            printf("%#lx,", $targets_ref->[$i]);
+        }
+    }
+    if ($color) {
+        printf("${color}%#lx${RESET}} ", $targets_ref->[-1]);
+    } else {
+        printf("%#lx}", $targets_ref->[-1]);
+    }
+}
+
+sub printf_prefix {
+    printf $_[0] ? "     |" : "|";
+}
+
+sub size_to_human_string {
+    my ($size) = @_;
+    my $str = qx/numfmt --to=iec --format="%.2f" $size/;
+    chomp $str;
+    return $str;
+}
+
+sub read_devmem {
+    my ($addr, $width) = @_;
+    my $val = qx/busybox devmem $addr $width/;
+    chomp $val;
+    $val = hex($val);
+    #printf("%#lx=busybox devmem $addr $width\n", $val);
+    return $val;
+}
+
+sub write_devmem {
+    my ($addr, $width, $val) = @_;
+    system("busybox devmem $addr $width $val >/dev/null 2>&1");
+}
+
+sub cat_sysfs_file {
+    my ($path_file) = @_;
+    my $str = qx/cat $path_file/;
+    chomp $str;
+    return $str;
+}
+
+sub basename {
+    my ($path) = @_;
+    my $str = (split '/', $path)[-1];
+    return $str;
+}
+
+my @coh_model_str = (
+    "${RED}unknown${RESET}",
+    "${RED}Device Coh${RESET}",
+    "HDM-H",
+    "HDM-H or ${RED}HDM-D/HDM-DB${RESET}",
+);
+my @target_range_type_str = ( "${RED}HDM-D/HDM-DB${RESET}", "HDM-H" );
+sub dump_hdmdec {
+    my ($cxl_port) = @_;
+    my $hdm_base = $cxl_port->{hdm_base};
+    my $name = $cxl_port->{name};
+    my $port = $cxl_port->{port};
+    my $is_memdev = $cxl_port->{is_memdev};
+
+    my $cap = read_devmem($hdm_base, 32);
+    my $gbl_ctl = read_devmem($hdm_base + 0x4, 32);
+    my ($hdm_cnt, $tag_cnt) = ($cxl_port->{hdm_cnt}, ($cap & 0xf0) >> 4);
+
+    printf_prefix($is_memdev);
+    my $uio = $cap & (1 << 13);
+    printf("    %-40s %d-Decoders %s%s %s %s %s %s %s %s%s SupCohModels:%s\n",
+        "HDMCap ", $hdm_cnt, $is_memdev ? "" : sprintf("%d-Tgts ", $tag_cnt),
+        flag_to_color_str("A11to8", $cap, 8, "", $is_memdev ? "" : $RED),
+        flag_to_color_str("A14to12", $cap, 9, "", $is_memdev ? "" : $RED),
+        flag_to_color_str("PoisonOnDecErr", $cap, 10),
+        flag_to_color_str("Iw3,6,12", $cap, 11, $is_memdev ? "" : $RED),
+        flag_to_color_str("Iw16", $cap, 12, $is_memdev ? "" : $RED),
+        flag_to_color_str("Uio", $cap, 13),
+        !$uio ? "" : num_to_color_str("UioCnt ", ($cap >> 16) & 0xf),
+        flag_to_color_str("MemDataNXM", $cap, 20),
+        $coh_model_str[($cap >> 21) & 3]);
+
+    printf_prefix($is_memdev);
+    printf("    %-40s %s %s\n", "HDMGblCtl ",
+        flag_to_color_str("PoisonOnDecErrEn", $gbl_ctl, 0),
+        $is_memdev ? flag_to_color_str("HDMDecEn", $gbl_ctl, 1) : "");
+
+    if ($hdm_cnt == 0) {
+        printf_prefix($is_memdev);
+        printf("    ${RED}Can't found HDM decoder!!!${RESET}\n\n");
+        return;
+    }
+
+    for my $hid (0 .. $hdm_cnt-1) {
+        my $size_l = read_devmem($hdm_base + $hid * 0x20 + 0x18, 32);
+        my $size_h = read_devmem($hdm_base + $hid * 0x20 + 0x1c, 32);
+        my $size = ($size_h << 32) | $size_l;
+        next if !$size && !$g_verbose;
+
+        my ($print_err, $print_ok) = (0, 0);
+        my $base_l = read_devmem($hdm_base + $hid * 0x20 + 0x10, 32);
+        my $base_h = read_devmem($hdm_base + $hid * 0x20 + 0x14, 32);
+        my $base = ($base_h << 32) | $base_l;
+        my $ctl = read_devmem($hdm_base + $hid * 0x20 + 0x20, 32);
+        my $skip_l = read_devmem($hdm_base + $hid * 0x20 + 0x24, 32);
+        my $skip_h = read_devmem($hdm_base + $hid * 0x20 + 0x28, 32);
+        my $skip = ($skip_h << 32) | $skip_l;
+
+        my @iw_rp_targets;
+        if (!$is_memdev) {
+            my $rp_list = $skip;
+            my $iw = ($ctl & 0xf0) >> 4;
+
+            my $rp_cnt = scalar @{$cxl_port->{rports}};
+            push @iw_rp_targets, $rp_list & 0xff;
+            if ($iw >= 1 && $rp_cnt >= 2) {
+                push @iw_rp_targets, ($rp_list >> 8) & 0xff;
+                if ($iw >= 2 && $rp_cnt >= 4) {
+                    push @iw_rp_targets, ($rp_list >> 16) & 0xff, ($rp_list >> 24) & 0xff;
+                    if ($iw >= 3 && $rp_cnt >= 8) {
+                        push @iw_rp_targets, ($rp_list >> 32) & 0xff, ($rp_list >> 40) & 0xff, ($rp_list >> 48) & 0xff, ($rp_list >> 56) & 0xff;
+                    }
+                }
+            }
+        }
+
+        my ($decoder, $dax, $dax_mode, $region) = (
+            $cxl_port->{decoders}[$hid],
+            $cxl_port->{daxs}[$hid]->{name},
+            $cxl_port->{daxs}[$hid]->{mode},
+            $cxl_port->{regions}[$hid],
+        );
+
+        if ($dax && $dax ne "dax<?>") {
+            # has dax, but not has endpoint or decoder
+            if ($port eq "endpoint<?>" || $port eq "port<?>" || $decoder eq "decoder<?>" || !$port || !$decoder) {
+                #$decoder = "decoder<?>";
+                $print_err = 1;
+            } else {
+                $print_ok = 1;
+            }
+        }
+
+        my $hdm_r_str = sprintf("%lx-%lx", $base, $base + $size -1);
+        my $hdm_sz_str = size_to_human_string($size);
+        my $hdm_dpa_skip_sz_str = $skip ? "DpaSkipSz=" . size_to_human_string($skip) : "${GRAY}DpaSkipSz=0${RESET}";
+        my $hdm_target_range_type = $target_range_type_str[($ctl >> 12) & 1];
+        printf_prefix($is_memdev);
+        printf "    ";
+
+        if ($print_err) {
+            printf("${RED}%-40s${RESET} ${RED}%-25s %-7s${RESET} ",
+                sprintf("%s -> %s %s %s", $decoder, $region, $dax, $dax_mode), $hdm_r_str, $hdm_sz_str);
+            if ($is_memdev) {
+                printf("%s", $hdm_dpa_skip_sz_str);
+            } else {
+                dump_hb_iw_rp_targets(\@iw_rp_targets);
+            }
+            printf(" ${RED}ig=%d iw=%d${RESET} ", $ctl & 0xf, ($ctl & 0xf0) >> 4);
+        } elsif ($print_ok) {
+            printf("${GREEN}%-40s${RESET} ${ORANGE}%-25s %-7s${RESET} ",
+                sprintf("%s -> %s %s %s", $decoder, $region, $dax, $dax_mode), $hdm_r_str, $hdm_sz_str);
+            if ($is_memdev) {
+                printf("%s", $hdm_dpa_skip_sz_str);
+            } else {
+                dump_hb_iw_rp_targets(\@iw_rp_targets, $ORANGE);
+            }
+            printf(" ${ORANGE}ig=%d iw=%d${RESET} ", $ctl & 0xf, ($ctl & 0xf0) >> 4);
+        } else {
+            printf("%-40s %-25s %-7s ", "$decoder ", $hdm_r_str, $hdm_sz_str);
+            if ($is_memdev) {
+                printf("%s", $hdm_dpa_skip_sz_str);
+            } else {
+                dump_hb_iw_rp_targets(\@iw_rp_targets);
+            }
+            printf(" ig=%d iw=%d ", $ctl & 0xf, ($ctl & 0xf0) >> 4);
+        }
+
+        my $uio = $cap & (1 << 13);
+        printf("%s %s %s %s TgtType:%s %s %s%s%s%s\n",
+            flag_to_color_str("LockOnCmt", $ctl, 8),
+            flag_to_color_str("Cmt", $ctl, 9, $print_err ? $RED : ""),
+            flag_to_color_str("Cmtted", $ctl, 10, $print_err ? $RED : ""),
+            flag_to_color_str("ErrNotCmtted", $ctl, 11, $RED),
+            $hdm_target_range_type,
+            flag_to_color_str("Bi", $ctl, 13),
+            !$uio ? "" : flag_to_color_str("Uio ", $ctl, 14),
+            !$uio ? "" : num_to_color_str("Uig ", ($ctl >> 16) & 0xf),
+            !$uio ? "" : num_to_color_str("Uiw ", ($ctl >> 20) & 0xf),
+            !$uio ? "" : num_to_color_str("Isp ", ($ctl >> 24) & 0xf));
+    }
+}
+
+sub clear_hdmdec_commit {
+    my ($cxl_port, $hid) = @_;
+    my $hdm_base = $cxl_port->{hdm_base};
+    my $ctl_addr = $hdm_base + $hid * 0x20 + 0x20;
+
+    my $desc = $cxl_port->{is_memdev} ?
+    sprintf("%-30s: clear commit %s", "CXL Type3 Device $cxl_port->{mem}", $cxl_port->{decoders}[$hid]) :
+    sprintf("%-30s: clear commit %s", "CXL Host Brdge $cxl_port->{port}", $cxl_port->{decoders}[$hid]);
+
+    my $ctl = read_devmem($ctl_addr, 32);
+    my $commit = ($ctl >> 9) & 1;
+    my $committed = ($ctl >> 10) & 1;
+    if ($commit || $committed) {
+        write_devmem($ctl_addr, 32, $ctl & ~(1 << 9));
+
+        my $start = int(time() * 1000);
+        while (1) {
+            $ctl = read_devmem($ctl_addr, 32);
+            $commit = ($ctl >> 9) & 1;
+            $committed = ($ctl >> 10) & 1;
+            my $delta_ms = int(time() * 1000) - $start;
+            if (!$commit && !$committed) {
+                last;
+            } elsif ($delta_ms > $COMMIT_TIMEOUT_MS) {
+                printf("${RED}%s failed: clear decoder%d commit timeout %dms (%dms)${RESET}\n",
+                    $desc, $hid, $delta_ms, $COMMIT_TIMEOUT_MS);
+                exit 1;
+            }
+            sleep 0.001;
+        }
+    }
+
+    my $gbl_ctl = read_devmem($hdm_base + 0x4, 32);
+    if (($gbl_ctl >> 1) & 1) {
+        write_devmem($hdm_base + 0x4, 32, $gbl_ctl & ~(1 << 1));
+    }
+
+    #write_devmem($hdm_base + $hid * 0x20 + 0x10, 32, 0),
+    #write_devmem($hdm_base + $hid * 0x20 + 0x14, 32, 0),
+    #write_devmem($hdm_base + $hid * 0x20 + 0x18, 32, 0);
+    #write_devmem($hdm_base + $hid * 0x20 + 0x1c, 32, 0);
+
+    sleep 5 if $zebu;
+    printf("${GREEN}%s success${RESET}\n", $desc);
+}
+
+sub commit_hdmdec {
+    my ($cxl_port, $hid, $ig, $iw, $base, $size) = @_;
+    $base //= 0; $size //= 0;
+    my $hdm_base = $cxl_port->{hdm_base};
+    my $ctl_addr = $hdm_base + $hid * 0x20 + 0x20;
+
+    my $desc = sprintf("%-30s: commit %s ig:${ig} iw:${iw} %s",
+        $cxl_port->{is_memdev} ? "CXL Type3 Device $cxl_port->{mem}" : "CXL Host Bridge $cxl_port->{port}",
+        $cxl_port->{decoders}[$hid],
+        $size ? sprintf("base:%#lx size:%s", $base, size_to_human_string($size)) : "");
+
+    my $ctl = read_devmem($ctl_addr, 32);
+    write_devmem($ctl_addr, 32, ($ctl & ~0xff) | ($iw << 4) | $ig);
+    $ctl = read_devmem($ctl_addr, 32);
+    my ($_ig, $_iw) = ($ctl & 0xf, ($ctl & 0xf0) >> 4);
+    if ($_ig != $ig || $_iw != $iw) {
+        printf("${RED}%s failed: set ig iw mismatch!!!${RESET}\n", $desc);
+        exit 1;
+    }
+
+    if ($size) {
+        write_devmem($hdm_base + $hid * 0x20 + 0x10, 32, $base & hex("0xffffffff"));
+        write_devmem($hdm_base + $hid * 0x20 + 0x14, 32, $base >> 32);
+        write_devmem($hdm_base + $hid * 0x20 + 0x18, 32, $size & hex("0xffffffff"));
+        write_devmem($hdm_base + $hid * 0x20 + 0x1c, 32, $size >> 32);
+        my $_base_l = read_devmem($hdm_base + $hid * 0x20 + 0x10, 32);
+        my $_base_h = read_devmem($hdm_base + $hid * 0x20 + 0x14, 32);
+        my $_size_l = read_devmem($hdm_base + $hid * 0x20 + 0x18, 32);
+        my $_size_h = read_devmem($hdm_base + $hid * 0x20 + 0x1c, 32);
+        my $_base = ($_base_h << 32) | $_base_l;
+        my $_size = ($_size_h << 32) | $_size_l;
+        if ($_size != $size || $_base != $base) {
+            printf("${RED}%s failed: set base sz mismatch, read_back: %#lx %#lx!!!${RESET}\n", $desc, $_base, $_size);
+            exit 1;
+        }
+    }
+
+    write_devmem($ctl_addr, 32, read_devmem($ctl_addr, 32) | (1 << 9));
+    my $start = int(time() * 1000);
+    while (1) {
+        sleep 0.001;
+        $ctl = read_devmem($ctl_addr, 32);
+        if ($ctl & (1 << 11)) {
+            printf("${RED}%s failed: commit error${RESET}\n", $desc);
+            exit 1;
+        }
+
+        my $delta_ms = int(time() * 1000) - $start;
+        if ($delta_ms > $COMMIT_TIMEOUT_MS) {
+            printf("${RED}%s failed: commit timeout %dms (%dms)${RESET}\n",
+                $desc, $delta_ms, $COMMIT_TIMEOUT_MS);
+            exit 1;
+        }
+
+        last if $ctl & (1 << 10);
+    }
+
+    # global ctrl hdm en
+    write_devmem($hdm_base + 0x4, 32, read_devmem($hdm_base + 0x4, 32) | (1 << 1));
+    sleep 5 if $zebu;
+    printf("${GREEN}%s success${RESET}\n", $desc);
+    return 0;
+}
+
+sub init_hdmdec {
+    my ($cxl_port) = @_;
+    my $hdm_base = $cxl_port->{hdm_base};
+
+    my $cap = read_devmem($hdm_base, 32);
+    my $tmp = $cap & 0xf;
+    my $hdm_cnt = 0;
+    if ($tmp == 0) {
+        $hdm_cnt = 1;
+    } elsif ($tmp >= 1 && $tmp <= 8) {
+        $hdm_cnt = 2 * $tmp;
+    } elsif ($tmp >= 9 && $tmp <= 12) {
+        $hdm_cnt = 4 * ($tmp - 8) + 16;
+    } else {
+        return;
+    }
+    $cxl_port->{hdm_cnt} = $hdm_cnt;
+
+    $cxl_port->{decoders} = [];
+    $cxl_port->{daxs} = [];
+    $cxl_port->{regions} = [];
+
+    # 扫描 sysfs 下的 decoder 目录
+    my $port = $cxl_port->{port};
+    my $cnt = 0;
+    my @decoder_dirs = glob("/sys/bus/cxl/devices/${port}/decoder[0-9]*");
+    foreach my $decoder_dir (@decoder_dirs) {
+        next unless ($decoder_dir && -d $decoder_dir);
+
+        my $dax = { name => "dax<?>", mode => "" };
+        my $decoder = basename($decoder_dir);
+        my $region = cat_sysfs_file("$decoder_dir/region");
+        if ($region) {
+            # TODO for multiple daxs
+            my @dax_paths = glob("/sys/bus/cxl/devices/${region}/dax_region[0-9]*/dax[0-9]*");
+            if (@dax_paths) {
+                $dax->{name} = basename($dax_paths[0]);
+                if (!-e "$dax_paths[0]/driver") {
+                    $dax->{mode} = "<?>";
+                } else {
+                    my $driver = basename(readlink("$dax_paths[0]/driver"));
+                    if ($driver eq "device_dax") {
+                        $dax->{mode} = "devdax";
+                    } elsif ($driver eq "kmem") {
+                        $dax->{mode} = "system-ram";
+                    }
+                }
+            }
+        } else {
+            $region = "region<?>";
+        }
+
+        push @{$cxl_port->{decoders}}, $decoder;
+        push @{$cxl_port->{regions}}, $region;
+        push @{$cxl_port->{daxs}}, $dax;
+        $cnt++;
+    }
+    for (; $cnt < $hdm_cnt; $cnt++) {
+        push @{$cxl_port->{decoders}}, "decoder<?>";
+        push @{$cxl_port->{regions}}, "region<?>";
+        push @{$cxl_port->{daxs}}, { name => "dax<?>", mode => "" };
+    }
+}
+
+sub scan_cxl1_X_type3_dev {
+}
+
+sub scan_cxl2_X_type3_dev {
+    my ($cxl_memdev) = @_;
+    my $bdf = $cxl_memdev->{bdf};
+    my $mem = $cxl_memdev->{mem};
+    my $lspci_out = qx/lspci -s $bdf -vvv 2>\/dev\/null/;
+    my ($hdmrange_cnt) = $lspci_out =~ /HDMCount\s+(\d+)/;
+    return -1 if !$hdmrange_cnt;
+
+    my ($bar_num) = $lspci_out =~ /BIR:\s*bar(\d+),.*component registers/;
+    my ($comp_bar_addr) = $lspci_out =~ /Region ${bar_num}: Memory at ([0-9a-f]+)/i;
+    my ($comp_reg_off) = $lspci_out =~ /.*component registers, offset: ([0-9a-f]+)/i;
+    my $comp_reg_base = hex($comp_bar_addr) + hex($comp_reg_off);
+    my $cachemem_pri_base = $comp_reg_base + 0x1000;
+
+    my $cxl_hdm_base = 0;
+    my $cap_cnt = (read_devmem($cachemem_pri_base, 32) >> 24);
+    for (my $addr = $cachemem_pri_base; $addr <= $cachemem_pri_base + $cap_cnt * 4; $addr +=4) {
+        my $data = read_devmem($addr, 32);
+        if (($data & 0xffff) == 5) {
+            $cxl_hdm_base = $cachemem_pri_base + ($data >> 20);
+            last;
+        }
+    }
+    if ($cxl_hdm_base == 0) {
+        printf("${RED}%s: can't found HDM decoder!!!${RESET}\n", $bdf);
+        return -1;
+    }
+    $cxl_memdev->{hdm_base} = $cxl_hdm_base;
+
+    # 匹配 endpoint 端口
+    my @endpoint_dirs = glob("/sys/bus/cxl/devices/endpoint[0-9]*");
+    foreach my $ep_dir (@endpoint_dirs) {
+        next unless ($ep_dir && -d $ep_dir);
+        my $uport = readlink("$ep_dir/uport");
+        my $tmp_mem = $uport ? basename($uport) : "";
+        if ($tmp_mem eq $mem) {
+            $cxl_memdev->{port} = basename($ep_dir);
+            last;
+        }
+    }
+    $cxl_memdev->{port} //= "endpoint<?>";
+
+    init_hdmdec($cxl_memdev);
+
+    if ($cxl_memdev->{port} eq "endpoint<?>") {
+        $cxl_memdev->{name} = sprintf("${PURPLE}%s %s ${RED}%s${RESET} CXL Type3 Device: HDM_BASE %#lx", $cxl_memdev->{mem}, $cxl_memdev->{bdf}, $cxl_memdev->{port}, $cxl_hdm_base);
+    } else {
+        $cxl_memdev->{name} = sprintf("${PURPLE}%s %s %s${RESET} CXL Type3 Device: HDM_BASE %#lx", $cxl_memdev->{mem}, $cxl_memdev->{bdf}, $cxl_memdev->{port}, $cxl_hdm_base);
+    }
+
+    push @cxl_type3_devs, $cxl_memdev;
+    return 0;
+}
+
+sub make_cedt_dsl() {
+    unlink "CEDT.dsl" if -e "CEDT.dsl";
+    if (-e "/sys/firmware/acpi/tables/CEDT") {
+        system("cp /sys/firmware/acpi/tables/CEDT . >/dev/null 2>&1");
+        system("iasl CEDT >/dev/null 2>&1");
+        unlink "CEDT" if -e "CEDT";
+    } else {
+        system("acpidump -b >/dev/null 2>&1");
+        my $ret = system("iasl cedt.dat >/dev/null 2>&1");
+        unlink glob("*.dat");
+        if ($ret != 0) {
+            die("${RED}No CEDT!!!${RESET}\n");
+        }
+    }
+}
+
+sub make_cdat_dsl() {
+}
+
+sub scan_cxl_cfmw() {
+    make_cedt_dsl();
+    open my $fh, '<', 'CEDT.dsl' or die "${RED}can't open CEDT.dsl!!!${RESET}";
+    my @cedt_lines = <$fh>;
+    close $fh;
+
+    my $cfmw_decoder_cnt = 0;
+    my $cfmw_decoder = {};
+    foreach my $line (@cedt_lines) {
+        chomp $line;
+        next if $line =~ /^\s*$/;
+
+        if ($line =~ /CXL Fixed Memory Window Structure/) {
+            if ($cfmw_decoder->{base}) {
+                $cfmw_decoder->{hid} = $cfmw_decoder_cnt;
+                $cfmw_decoder_cnt++;
+                push @{$cxl_cfmws->{decoders}}, $cfmw_decoder;
+                $cfmw_decoder = {};
+            }
+        } elsif ($line =~ /Window base address : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{base} = hex($1);
+        } elsif ($line =~ /Window size : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{size} = hex($1);
+        } elsif ($line =~ /Interleave Members(?: \(2\^n\))? : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{iw} = hex($1);
+        } elsif ($line =~ /Interleave Arithmetic : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{ari} = hex($1);
+        } elsif ($line =~ /Granularity : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{ig} = hex($1);
+        } elsif ($line =~ /Restrictions : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{restrictions} = hex($1);
+        } elsif ($line =~ /QtgId : ([0-9A-F]+)/i) {
+            $cfmw_decoder->{qtgid} = hex($1);
+        } elsif (($line =~ /First Target : ([0-9A-F]+)/i) || ($line =~ /Next Target : ([0-9A-F]+)/i)) {
+            push @{$cfmw_decoder->{targets}}, hex($1);
+            $cfmw_decoder->{target_cnt}++;
+        }
+    }
+    if ($cfmw_decoder->{base}) {
+        $cfmw_decoder->{hid} = $cfmw_decoder_cnt;
+        $cfmw_decoder_cnt++;
+        push @{$cxl_cfmws->{decoders}}, $cfmw_decoder;
+    }
+
+    my $root_dir = "/sys/bus/cxl/devices/root0";
+    my $uport = readlink("$root_dir/uport");
+    my $acpi = $uport ? basename($uport) : '';
+    $cxl_cfmws->{root} = basename($root_dir);
+    $cxl_cfmws->{acpi} = $acpi;
+
+    foreach my $cfmw_decoder (@{$cxl_cfmws->{decoders}}) {
+        $cfmw_decoder->{regions} = [];
+        $cfmw_decoder->{daxs} = [];
+        my $decoder_dir = (glob("/sys/bus/cxl/devices/$cxl_cfmws->{root}/decoder0.$cfmw_decoder->{hid}"))[0];
+        if ($decoder_dir) {
+            $cfmw_decoder->{decoder} = basename($decoder_dir);
+            my @region_dirs = glob("$decoder_dir/region*");
+            foreach my $region_dir (@region_dirs) {
+                push @{$cfmw_decoder->{regions}}, basename($region_dir);
+                my @dax_dirs = glob("$region_dir/dax_region[0-9]*/dax[0-9]*");
+                foreach my $dax_dir (@dax_dirs) {
+                    next unless $dax_dir;
+                    push @{$cfmw_decoder->{daxs}}, basename($dax_dir);
+                    last;
+                }
+            }
+        } else {
+            $cfmw_decoder->{decoder} = 'decoder<?>';
+        }
+    }
+
+    if (!$cxl_cfmws->{root}) {
+        $cxl_cfmws->{root} = "root<?>";
+        $cxl_cfmws->{acpi} = "ACPI0017:<?>";
+        $cxl_cfmws->{name} = sprintf("${RED}%s %s${RESET} CXL Fixed Memory Window", $cxl_cfmws->{root}, $cxl_cfmws->{acpi});
+    } else {
+        $cxl_cfmws->{name} = sprintf("${PURPLE}%s %s${RESET} CXL Fixed Memory Window", $cxl_cfmws->{root}, $cxl_cfmws->{acpi});
+    }
+    #printf("$cxl_cfmws->{name}\n");
+}
+
+sub dump_cfmw_decoder() {
+    if (!@{$cxl_cfmws->{decoders}}) {
+        printf("${RED}No CXL Fixed Memory Window!!!${RESET}\n\n");
+        return;
+    }
+
+    printf("$cxl_cfmws->{name}\n");
+    foreach my $cfmw_decoder (@{$cxl_cfmws->{decoders}}) {
+        my $start = $cfmw_decoder->{base};
+        my $end = $cfmw_decoder->{base} + $cfmw_decoder->{size} - 1;
+        my $restrictions = $cfmw_decoder->{restrictions};
+
+        my $cfmw_range = sprintf("%lx-%lx", $start, $end);
+        my $cfmw_sz_str = size_to_human_string($cfmw_decoder->{size});
+        my $region_cnt = scalar @{$cfmw_decoder->{regions}};
+        if ($region_cnt) {
+            printf("|    ${GREEN}%-40s ${ORANGE}%-25s %-7s iw:%d ig:%d${RESET} ia:%d ",
+                "$cfmw_decoder->{decoder} ", $cfmw_range, $cfmw_sz_str, $cfmw_decoder->{iw}, $cfmw_decoder->{ig}, $cfmw_decoder->{ari});
+        } else {
+            printf("|    %-40s %-25s %-7s iw:%d ig:%d ia:%d ",
+                "$cfmw_decoder->{decoder} ", $cfmw_range, $cfmw_sz_str, $cfmw_decoder->{iw}, $cfmw_decoder->{ig}, $cfmw_decoder->{ari});
+        }
+        printf("%s %s %s %s %s %s QtgId:%d ",
+            flag_to_color_str("DevCoh", $restrictions, 0),
+            flag_to_color_str("HostOnlyCoh", $restrictions, 1),
+            flag_to_color_str("Volatile", $restrictions, 2),
+            flag_to_color_str("Persist", $restrictions, 3),
+            flag_to_color_str("FixDevCfg", $restrictions, 4),
+            flag_to_color_str("BI", $restrictions, 5),
+            $cfmw_decoder->{qtgid});
+
+        printf("hb_targets:{${ORANGE}");
+        my $last_idx = $cfmw_decoder->{target_cnt} - 1;
+        for (my $i = 0; $i < $last_idx; $i++) {
+            printf("%#lx,", $cfmw_decoder->{targets}[${i}]);
+        }
+        printf("%#lx${RESET}}\n", $cfmw_decoder->{targets}[$last_idx]);
+
+        #if ($g_verbose && (scalar @{$cfmw_decoder->{regions}})) {
+        #    printf("|               ${GREEN} -> ");
+        #    foreach my $i (0 .. $#{$cfmw_decoder->{regions}}) {
+        #        printf("%s,%s ", $cfmw_decoder->{regions}[$i], $cfmw_decoder->{daxs}[$i]);
+        #    }
+        #    printf("${RESET}\n");
+        #}
+    }
+}
+
+sub get_hb_root_ports_str {
+    my ($cxl_hb) = @_;
+
+    if (!scalar @{$cxl_hb->{rports}}) {
+        return "rports:{${RED}<?>${RESET}}";
+    }
+
+    my $str = sprintf("rports:{");
+    my $bdf = "";
+    foreach my $i (0 .. $#{$cxl_hb->{rports}} - 1) {
+        my $rp = $cxl_hb->{rports}[$i];
+        $bdf = $rp->{bdf};
+        $str .= sprintf("%s", $bdf eq "<?>" ? "${RED}<?>${RESET}," : "${PURPLE}${bdf}${RESET},");
+    }
+    my $rp = $cxl_hb->{rports}[-1];
+    $bdf = $rp->{bdf};
+    $str .= sprintf("%s", $bdf eq "<?>" ? "${RED}<?>${RESET}}" : "${PURPLE}${bdf}${RESET}}");
+    return $str;
+}
+
+# cxl_hbs[]
+#
+# cxl_hb
+#   - uid
+#   - ver
+#   - chbs_base
+#   - chbs_len
+#   - hdm_cnt
+#   - hdm_base
+#   - rports[]
+#   - has_mem
+#
+# rport
+#   - bdf
+#   - mems[]
+#
+# cxl_memdev
+#   - bdf
+#   - mem           memX
+#   - is_memdev
+#   - size
+#   - parent_hb     $cxl_hb
+sub scan_cxl_host_bridge {
+    make_cedt_dsl();
+    open my $fh, '<', 'CEDT.dsl' or die "${RED}can't open CEDT.dsl!!!${RESET}";
+    my @cedt_lines = <$fh>;
+    close $fh;
+
+    my $tmp_hb = {};
+    foreach my $line (@cedt_lines) {
+        chomp $line;
+        next if $line =~ /^\s*$/;
+
+        if ($line =~ /CXL Host Bridge Structure/) {
+            if (defined $tmp_hb->{uid}) {
+                push @cxl_hbs, $tmp_hb;
+                $tmp_hb = {};
+            }
+        } elsif ($line =~ /Associated host bridge : ([0-9A-F]+)/i) {
+            $tmp_hb->{uid} = hex($1);
+        } elsif ($line =~ /Specification version : ([0-9A-F]+)/i) {
+            $tmp_hb->{ver} = hex($1);
+        } elsif ($line =~ /Register base : ([0-9A-F]+)/i) {
+            $tmp_hb->{chbs_base} = hex($1);
+        } elsif ($line =~ /Register length : ([0-9A-F]+)/i) {
+            $tmp_hb->{chbs_len} = hex($1);
+        }
+    }
+    push @cxl_hbs, $tmp_hb if defined $tmp_hb->{uid};
+
+    foreach my $cxl_hb (@cxl_hbs) {
+        $cxl_hb->{is_memdev} = 0;
+        $cxl_hb->{rports} = [];
+
+        my $cxl_ver = "";
+        my $CXL_HDM_BASE = 0;
+        if ($cxl_hb->{ver} == 1) { # CXL 2.0+
+            $cxl_ver = "${GREEN}CXL 2.X${RESET}";
+
+            my $bus_num = "<?>";
+            my $acpi = 'ACPI0016:<?>';
+            my $port = "port<?>";
+            my @port_dirs = glob("/sys/bus/cxl/devices/port[0-9]");
+            foreach my $port_dir (@port_dirs) {
+                next unless ($port_dir && -d $port_dir);
+                my $uid = "<?>";
+                if (readlink("$port_dir/uport")) {
+                    $bus_num = basename(readlink("$port_dir/uport"));
+                }
+                if (readlink("/sys/devices/$bus_num/firmware_node")) {
+                    $acpi = basename(readlink("/sys/devices/$bus_num/firmware_node"));
+                    $uid = cat_sysfs_file("/sys/bus/acpi/devices/$acpi/uid");
+                }
+                next unless $uid == $cxl_hb->{uid};
+
+                $port = basename($port_dir);
+                last;
+            }
+            $cxl_hb->{bus_num} = $bus_num;
+            $cxl_hb->{acpi} = $acpi;
+            $cxl_hb->{port} = $port;
+
+            # 遍历 dport 解析 RP BDF 和 memdev
+            if ($port ne "port<?>") {
+                my @dport_paths = glob("/sys/bus/cxl/devices/${port}/dport*");
+                foreach my $dport_path (@dport_paths) {
+                    next unless ($dport_path && -d $dport_path);
+                    my $dport = basename($dport_path);
+
+                    my $rport = { };
+                    $rport->{bdf} = readlink("$dport_path") ? basename(readlink("$dport_path")) : '<?>';
+                    push @{$cxl_hb->{rports}}, $rport;
+                    next if $rport->{bdf} eq '<?>';
+
+                    $rport->{mems} = [];
+                    my @memdev_bdf_paths = glob("$dport_path/*:*:*.[0-9]");
+                    foreach my $memdev_bdf_path (@memdev_bdf_paths) {
+                        # only 1 memdev for 1 bdf
+                        my $mem_path = (glob("$memdev_bdf_path/mem[0-9]"))[0];
+                        next unless ($mem_path && -d $mem_path);
+
+                        my $cxl_memdev = { };
+                        $cxl_memdev->{bdf} = basename($memdev_bdf_path);
+                        $cxl_memdev->{mem} = basename($mem_path);
+                        $cxl_memdev->{is_memdev} = 1;
+                        my $size_file = "/sys/bus/pci/devices/$cxl_memdev->{bdf}/$cxl_memdev->{mem}/ram/size";
+                        $cxl_memdev->{size} = hex(cat_sysfs_file($size_file)) & hex("fffffffff0000000");
+                        $cxl_memdev->{parent_hb} = $cxl_hb;
+                        # don't add mem if no hdm decoder
+                        next unless scan_cxl2_X_type3_dev($cxl_memdev) == 0;
+                        push @{$rport->{mems}}, $cxl_memdev;
+                        $cxl_hb->{has_mem} = 1;
+                    }
+                }
+            }
+
+            my $cachemem_pri_base = $cxl_hb->{chbs_base} + 0x1000;
+            my $cap_cnt = (read_devmem($cachemem_pri_base, 32) >> 24);
+            for (my $addr = $cachemem_pri_base; $addr <= $cachemem_pri_base + $cap_cnt * 4; $addr += 4) {
+                my $data = read_devmem($addr, 32);
+                if (($data & 0xffff) == 5) {
+                    $CXL_HDM_BASE = $cachemem_pri_base + ($data >> 20);
+                    last;
+                }
+            }
+            $cxl_hb->{hdm_base} = $CXL_HDM_BASE;
+            if ($CXL_HDM_BASE) {
+                init_hdmdec($cxl_hb);
+            } else {
+                $cxl_hb->{hdm_cnt} = 0;
+            }
+        } elsif ($cxl_hb->{ver} == 0) { # CXL 1.1
+            $cxl_ver = "${GREEN}CXL 1.1${RESET}";
+            my $rcrb_base = $cxl_hb->{chbs_base};
+            my $rcrb_dp_base = $rcrb_base;
+            my $rcrb_up_base = $rcrb_base + 0x1000;
+            my $rcrb_up_base_data = read_devmem($rcrb_up_base, 32);
+            if ($rcrb_up_base_data == 0xffffffff) {
+                printf("%s: CXL Device that Does Not Remap Upstream Port and Component Registers\n", $cxl_ver) if $g_debug;
+            } else {
+                printf("%s: CXL Device Remaps Upstream Port and Component Registers\n", $cxl_ver) if $g_debug;
+            }
+            my $rcrb_dp_membar0_l = read_devmem($rcrb_dp_base + 0x10, 32) & 0xfffffff0;
+            my $rcrb_dp_membar0_h = read_devmem($rcrb_dp_base + 0x14, 32);
+            my $rcrb_dp_membar0 = ($rcrb_dp_membar0_h << 32) | $rcrb_dp_membar0_l;
+            my $cachemem_pri_base = $rcrb_dp_membar0 + 0x1000;
+            my $cap_cnt = read_devmem($cachemem_pri_base, 32) >> 24;
+            $cxl_hb->{hdm_base} = 0;
+            $cxl_hb->{hdm_cnt} = 0;
+
+            my $bus_num = "<?>";
+            my $acpi = 'ACPI0016:<?>';
+            my $port = "port<?>";
+            my @dport_paths = glob("/sys/bus/cxl/devices/root0/dport[0-9]*");
+            foreach my $dport_path (@dport_paths) {
+                next unless ($dport_path && -d $dport_path);
+                my $uid = "<?>";
+                if (readlink("$dport_path")) {
+                    $bus_num = basename(readlink("$dport_path"));
+                }
+                if (readlink("/sys/devices/$bus_num/firmware_node")) {
+                    $acpi = basename(readlink("/sys/devices/$bus_num/firmware_node"));
+                    $uid = cat_sysfs_file("/sys/bus/acpi/devices/$acpi/uid");
+                }
+                next unless $uid == $cxl_hb->{uid};
+
+                $port = basename($dport_path);
+                my $rport = { };
+                $rport->{bdf} = $bus_num;
+                push @{$cxl_hb->{rports}}, $rport;
+                last if $rport->{bdf} eq '<?>';
+
+                $rport->{mems} = [];
+                my @memdev_bdf_paths = glob("$dport_path/*:*:*.[0-9]");
+                foreach my $memdev_bdf_path (@memdev_bdf_paths) {
+                    # only 1 memdev for 1 bdf
+                    my $mem_path = (glob("$memdev_bdf_path/mem[0-9]"))[0];
+                    next unless ($mem_path && -d $mem_path);
+
+                    my $cxl_memdev = { };
+                    $cxl_memdev->{bdf} = basename($memdev_bdf_path);
+                    $cxl_memdev->{mem} = basename($mem_path);
+                    $cxl_memdev->{is_memdev} = 1;
+                    my $size_file = "/sys/bus/pci/devices/$cxl_memdev->{bdf}/$cxl_memdev->{mem}/ram/size";
+                    $cxl_memdev->{size} = hex(cat_sysfs_file($size_file)) & hex("fffffffff0000000");
+                    $cxl_memdev->{parent_hb} = $cxl_hb;
+                    # don't add mem if no hdm decoder
+                    next unless scan_cxl2_X_type3_dev($cxl_memdev) == 0;
+                    push @{$rport->{mems}}, $cxl_memdev;
+                    $cxl_hb->{has_mem} = 1;
+                    printf("%s\n", $cxl_memdev->{name}) if $g_debug;
+                }
+
+                last;
+            }
+            $cxl_hb->{bus_num} = $bus_num;
+            $cxl_hb->{acpi} = $acpi;
+            $cxl_hb->{port} = $port;
+        }
+
+        my $rports_str = get_hb_root_ports_str($cxl_hb);
+        if ($cxl_hb->{port} eq "port<?>") {
+            $cxl_hb->{name} = sprintf("${RED}%s %s %s${RESET} CXL Host Bridge: uid:%#lx %s %s:%lx-%lx HDM_BASE %#lx %s",
+                $cxl_hb->{port}, $cxl_hb->{acpi}, $cxl_hb->{bus_num}, $cxl_hb->{uid}, $cxl_ver, $cxl_hb->{ver} == 0 ? "RCRB" : "CHBCR",
+                $cxl_hb->{chbs_base}, $cxl_hb->{chbs_base} + $cxl_hb->{chbs_len} - 1, $cxl_hb->{hdm_base}, $rports_str);
+        } else {
+            $cxl_hb->{name} = sprintf("${PURPLE}%s %s %s${RESET} CXL Host Bridge: uid:${ORANGE}%#lx${RESET} %s %s:%lx-%lx HDM_BASE %#lx %s",
+                $cxl_hb->{port}, $cxl_hb->{acpi}, $cxl_hb->{bus_num}, $cxl_hb->{uid}, $cxl_ver, $cxl_hb->{ver} == 0 ? "RCRB" : "CHBCR",
+                $cxl_hb->{chbs_base}, $cxl_hb->{chbs_base} + $cxl_hb->{chbs_len} - 1, $cxl_hb->{hdm_base}, $rports_str);
+        }
+        printf("%s\n", $cxl_hb->{name}) if $g_debug;
+    }
+}
+
+sub dump_cxl_hdmdec {
+    my ($mem) = @_;
+    if ($mem) {
+        foreach my $cxl_hb (@cxl_hbs) {
+            next if (!$g_verbose && ((!scalar @{$cxl_hb->{rports}}) || !$cxl_hb->{hdm_cnt}));
+            foreach my $rport (@{$cxl_hb->{rports}}) {
+                foreach my $i (0 .. $#{$rport->{mems}}) {
+                    my $cxl_memdev = $rport->{mems}[$i];
+                    next if ($cxl_memdev->{mem} ne $mem);
+
+                    $i == 0 ? printf("\\--- ") : printf("     ");
+                    printf "$rport->{mems}[$i]->{name}\n";
+                    dump_hdmdec($cxl_memdev, 0);
+                }
+            }
+        }
+    } else {
+        dump_cfmw_decoder();
+        foreach my $cxl_hb (@cxl_hbs) {
+            next if (!$g_verbose && ((!scalar @{$cxl_hb->{rports}}) || !$cxl_hb->{has_mem}));
+
+            printf "$cxl_hb->{name}\n";
+            dump_hdmdec($cxl_hb) if $cxl_hb->{hdm_cnt};
+
+            foreach my $rport (@{$cxl_hb->{rports}}) {
+                foreach my $i (0 .. $#{$rport->{mems}}) {
+                    my $cxl_memdev = $rport->{mems}[$i];
+                    $i == 0 ? printf("\\--- ") : printf("     ");
+                    printf "$cxl_memdev->{name}\n";
+                    dump_hdmdec($cxl_memdev, 0);
+                }
+            }
+        }
+    }
+}
+
+sub do_subcmd_commit {
+    my (@args) = @_;
+    my ($base, $size, $mem_name, $port_name, $ig, $iw, $decoder_idx, $verbose, $help);
+
+    Getopt::Long::Configure('pass_through');
+    Getopt::Long::GetOptionsFromArray(
+        \@args,
+        'base|b=s'     => \$base,
+        'size|s=s'     => \$size,
+        'mem|m=s'      => \$mem_name,
+        'port|p=s'     => \$port_name,
+        'decoder|d=i'  => \$decoder_idx,
+        'ig|g=i'       => \$ig,
+        'iw|w=i'       => \$iw,
+        'verbose|v'    => \$verbose,
+        'help|h'       => \$help,
+    ) or do {
+        printf("${RED}invalid input!!!${RESET}\n");
+        return 1;
+    };
+
+    if ($help) {
+        print "$USAGE\n";
+        return 0;
+    }
+
+    $base //= 0;
+    $size //= 0;
+    $ig //= 0;
+    $iw //= 0;
+    $decoder_idx //= 0;
+    $g_verbose = 1 if $verbose;
+
+    if (!$mem_name && !$port_name) {
+        printf("${RED}need <-m memX|-p portX> [-d decoder_idx] [-w iw] [-g ig] [-b hpa_base] [-s hpa_size] parameter!!!${RESET}\n");
+        return 1;
+    }
+    if (($iw > 4 && $iw < 8) || $iw > 10 || $ig > 6) {
+        printf("${RED}invalid ig=%d iw=%d!!!${RESET}\n", $ig, $iw);
+        return 1;
+    }
+    if ($size && $size % 0x10000000 != 0) {
+        printf("${RED}invalid size=%#lx, must be a multiple of 0x10000000!!!${RESET}\n", $size);
+        return 1;
+    }
+    if ($iw >=8 && $iw <=10 && ($size >> 28) %3 != 0) {
+        printf("${RED}invalid size=%#lx for iw=%d, must be a multiple of 0x30000000!!!${RESET}\n", $size, $iw);
+        return 1;
+    }
+    if ($decoder_idx > 4) {
+        printf("${RED}invalid decoder idx:%d, must smaller than 4!!!${RESET}\n", $decoder_idx);
+        return 1;
+    }
+
+    scan_cxl_host_bridge();
+    if ($mem_name) {
+        foreach my $dev (@cxl_type3_devs) {
+            if ($dev->{mem} eq $mem_name) {
+                return commit_hdmdec($dev, $decoder_idx, $ig, $iw, hex($base), hex($size));
+            }
+        }
+    } else {
+        foreach my $dev (@cxl_hbs) {
+            if ($dev->{port} eq $port_name) {
+                return commit_hdmdec($dev, $decoder_idx, $ig, $iw, hex($base), hex($size));
+            }
+        }
+    }
+
+    my $not_found = $mem_name ? $mem_name : $port_name;
+    printf("${RED}can found %s!!!${RESET}\n", $not_found);
+    return 1;
+}
+
+sub do_subcmd_clear {
+    my (@args) = @_;
+    my ($mem_name, $port_name, $decoder_idx, $verbose, $help);
+
+    Getopt::Long::Configure('pass_through');
+    Getopt::Long::GetOptionsFromArray(
+        \@args,
+        'mem|m=s'      => \$mem_name,
+        'port|p=s'     => \$port_name,
+        'decoder|d=i'  => \$decoder_idx,
+        'verbose|v'    => \$verbose,
+        'help|h'       => \$help,
+    ) or do {
+        printf("${RED}invalid input!!!${RESET}\n");
+        return 1;
+    };
+
+    if ($help) {
+        print "$USAGE\n";
+        return 0;
+    }
+
+    $decoder_idx //= 0;
+    $g_verbose = 1 if $verbose;
+
+    if (!$mem_name && !$port_name) {
+        printf("${RED}need <-m memX|-p portX> [-d decoder_idx] parameter!!!${RESET}\n");
+        return 1;
+    }
+    if ($decoder_idx > 4) {
+        printf("${RED}invalid decoder idx:%d, must smaller than 4!!!${RESET}\n", $decoder_idx);
+        return 1;
+    }
+
+    scan_cxl_host_bridge();
+    if ($mem_name) {
+        foreach my $dev (@cxl_type3_devs) {
+            if ($dev->{mem} eq $mem_name) {
+                return clear_hdmdec_commit($dev, $decoder_idx);
+            }
+        }
+    } else {
+        foreach my $dev (@cxl_hbs) {
+            if ($dev->{port} eq $port_name) {
+                return clear_hdmdec_commit($dev, $decoder_idx);
+            }
+        }
+    }
+
+    my $not_found = $mem_name ? $mem_name : $port_name;
+    printf("${RED}can found %s!!!${RESET}\n", $not_found);
+    return 1;
+}
+
+sub do_loop_test {
+    scan_cxl_host_bridge();
+    my $loop = 1;
+    while (1) {
+        printf "====================== $loop ==================\n";
+        foreach my $dev (@cxl_type3_devs) {
+            for my $iw (0..4) {
+                for my $ig (0..6) {
+                    commit_hdmdec($dev, 0, $ig, $iw);
+                }
+            }
+            if ($zebu) {
+                for my $iw (8..10) {
+                    for my $ig (0..6) {
+                        commit_hdmdec($dev, 0, $ig, $iw);
+                    }
+                }
+            }
+        }
+        $loop++;
+    }
+    exit 0;
+}
+
+sub main() {
+    my $lscpu_out = qx/lscpu/;
+    my ($hypervisor) = $lscpu_out =~ /Hypervisor vendor\s+:\s+(\w+)/;
+    if ($hypervisor && $hypervisor eq 'KVM') {
+        $zebu = 1;
+        $COMMIT_TIMEOUT_MS = 10000;
+    } else {
+        $zebu = 0;
+        $COMMIT_TIMEOUT_MS = 300;
+    }
+
+    my $subcmd = shift @ARGV;
+    if (!$subcmd || $subcmd eq '-v' || $subcmd eq '-m') {
+        $g_verbose = 1 if defined $subcmd && $subcmd eq '-v';
+        scan_cxl_cfmw();
+        scan_cxl_host_bridge();
+        dump_cxl_hdmdec(@ARGV);
+        return 0;
+    } elsif ($subcmd eq 'commit') {
+        return do_subcmd_commit(@ARGV);
+    } elsif ($subcmd eq 'clear') {
+        return do_subcmd_clear(@ARGV);
+    } elsif ($subcmd eq '-t') {
+        return do_loop_test();
+    } elsif ($subcmd eq '-h' || $subcmd eq '--help') {
+        print "$USAGE\n";
+        return 0;
+    } else {
+        printf "%sinvalid subcommand!!!%s\n", $RED, $RESET;
+        print "$USAGE\n";
+        return 1;
+    }
+
+    return 0;
+}
+
+main();
